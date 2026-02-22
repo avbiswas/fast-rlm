@@ -1,0 +1,55 @@
+site_name: fast-rlm
+site_description: Recursive Language Models
+site_url: https://avbiswas.github.io/fast-rlm/
+repo_url: https://github.com/avbiswas/fast-rlm
+repo_name: avbiswas/fast-rlm
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: deep purple
+      accent: purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: deep purple
+      accent: purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - content.code.copy
+    - content.code.annotate
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - toc.follow
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - attr_list
+  - md_in_html
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - tables
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Quick Start: getting-started/quickstart.md
+  - Guide:
+      - Configuration: guide/configuration.md
+      - Log Viewer: guide/log-viewer.md
+  - Development:
+      - From Source: development/from-source.md
+      - Benchmarks: development/benchmarks.md

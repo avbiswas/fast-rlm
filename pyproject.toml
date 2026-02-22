@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "fast-rlm"
 version = "0.1.1"
-description = "Recursive Language Model — fast agentic LLM orchestration"
+description = "Recursive Language Model"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -35,6 +35,8 @@ exclude = [
     "images",
     "benchmarks",
     "uv.lock",
+    "docs",
+    "mkdocs.yml",
 ]
 
 [tool.hatch.build.targets.wheel]
