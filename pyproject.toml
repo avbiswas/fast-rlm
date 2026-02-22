@@ -1,20 +1,53 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools]
-py-modules = ["fast_rlm"]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
-name = "rlm"
-version = "0.1.0"
-description = "Add your description here"
+name = "fast-rlm"
+version = "0.1.1"
+description = "Recursive Language Model"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "datasets==3.6.0",
-    "dspy>=3.1.3",
-    "markdownify>=1.2.2",
-    "rich>=14.3.2",
-    "wikipedia>=1.4.0",
+    "pyyaml>=6.0",
 ]
+
+[project.optional-dependencies]
+benchmarks = [
+    "datasets==3.6.0",
+]
+
+[project.scripts]
+fast-rlm-log = "fast_rlm._cli:view_log"
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    ".venv",
+    ".jj",
+    ".claude",
+    "node_modules",
+    "tui_log_viewer/node_modules",
+    "logs",
+    "sample_logs",
+    "dist",
+    "__pycache__",
+    "*.egg-info",
+    "images",
+    "benchmarks",
+    "uv.lock",
+    "docs",
+    "mkdocs.yml",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["fast_rlm"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src" = "fast_rlm/_engine/src"
+"deno.json" = "fast_rlm/_engine/deno.json"
+"deno.lock" = "fast_rlm/_engine/deno.lock"
+"rlm_config.yaml" = "fast_rlm/_engine/rlm_config.yaml"
+"tui_log_viewer/src" = "fast_rlm/_engine/tui_log_viewer/src"
+"tui_log_viewer/package.json" = "fast_rlm/_engine/tui_log_viewer/package.json"
+"tui_log_viewer/tsconfig.json" = "fast_rlm/_engine/tui_log_viewer/tsconfig.json"
+"tui_log_viewer/bun.lock" = "fast_rlm/_engine/tui_log_viewer/bun.lock"

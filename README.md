@@ -2,7 +2,7 @@
 
 A minimal implementation of Recursive Language Models (RLMs) using Deno and Pyodide.
 
-> **📺 Watch the full video for free**
+> **Watch the full video for free**
 > **[RLM Tutorial](https://youtu.be/nxaVvvrezbY)**
 
 ## What are RLMs
@@ -17,7 +17,91 @@ If you find this helpful, consider supporting on Patreon — it hosts all code, 
 
 ---
 
-## Installation
+## Install
+
+```bash
+pip install fast-rlm
+```
+
+### Requirements
+
+- Python 3.10+
+- [Deno](https://deno.land/) 2+ — `curl -fsSL https://deno.land/install.sh | sh`
+- (Optional) [Bun](https://bun.sh/) — only needed for the TUI log viewer
+
+### Environment Variables
+
+Set your LLM API key before running:
+
+```bash
+export RLM_MODEL_API_KEY=sk-or-...
+```
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `RLM_MODEL_API_KEY` | API key for your LLM provider | — |
+| `RLM_MODEL_BASE_URL` | OpenAI-compatible base URL | `https://openrouter.ai/api/v1` |
+
+By default, fast-rlm uses [OpenRouter](https://openrouter.ai). You can point it at any OpenAI-compatible API by setting `RLM_MODEL_BASE_URL`.
+
+---
+
+## Quick Start
+
+```python
+import fast_rlm
+
+result = fast_rlm.run("Generate 50 fruits and count number of r")
+print(result["results"])
+print(result["usage"])
+```
+
+## Configuration
+
+```python
+from fast_rlm import run, RLMConfig
+
+config = RLMConfig.default()
+config.primary_agent = "minimax/minimax-m2.5"
+config.sub_agent = "minimax/minimax-m2.5"
+config.max_depth = 5
+config.max_money_spent = 2.0
+
+result = run(
+    "Count the r's in 50 fruit names",
+    prefix="r_count",
+    config=config,
+)
+```
+
+All config fields:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `primary_agent` | `str` | `z-ai/glm-5` | Model for the root agent |
+| `sub_agent` | `str` | `minimax/minimax-m2.5` | Model for child subagents |
+| `max_depth` | `int` | `3` | Max recursive subagent depth |
+| `max_calls_per_subagent` | `int` | `20` | Max LLM calls per subagent |
+| `truncate_len` | `int` | `2000` | Output chars shown to the LLM per step |
+| `max_money_spent` | `float` | `1.0` | Hard budget cap in USD |
+
+## Log Viewer
+
+![TUI Log Viewer](images/tui.jpeg)
+
+Every run saves a `.jsonl` log file to `logs/`.
+
+```bash
+# Print stats (no extra dependencies)
+fast-rlm-log logs/run_xxx.jsonl
+
+# Interactive TUI viewer (requires bun)
+fast-rlm-log logs/run_xxx.jsonl --tui
+```
+
+---
+
+## Development (from source)
 
 ### 1. Install Deno
 
@@ -25,135 +109,58 @@ If you find this helpful, consider supporting on Patreon — it hosts all code, 
 curl -fsSL https://deno.land/install.sh | sh
 ```
 
-Then follow the instructions to add Deno to your `PATH`, or add it manually:
+Then add Deno to your `PATH`:
 
 ```bash
 export DENO_INSTALL="$HOME/.deno"
 export PATH="$DENO_INSTALL/bin:$PATH"
 ```
 
-Verify:
-
-```bash
-deno --version
-```
-
-### 2. Install uv (Python package manager)
-
-To use from python scripts, or try benchmarking with huggingface datasets
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-### 3. Install Bun (for the log viewer)
+### 2. Install Bun (for the log viewer)
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-```
-
-### 4. Install log viewer dependencies
-
-```bash
 cd tui_log_viewer && bun install
 ```
 
----
+### 3. API Key Setup
 
-## API Key Setup
+Set your key in `.env` or `.envrc`:
 
-fast-rlm uses [OpenRouter](https://openrouter.ai) for LLM access. Set your API key in either a `.env` file or `.envrc` (for direnv users):
-
-**.env**
-```
-OPENROUTER_API_KEY=sk-or-...
-```
-
-**.envrc**
 ```bash
-export OPENROUTER_API_KEY=sk-or-...
+export RLM_MODEL_API_KEY=sk-or-...
 ```
 
-Deno picks up `.env` automatically. If using `.envrc`, run `direnv allow` once in the project root.
+### 4. Configuration
 
----
-
-## Configuration
-
-All hyperparameters are set in `rlm_config.yaml` at the project root:
+Edit `rlm_config.yaml` at the project root:
 
 ```yaml
-max_calls_per_subagent: 20   # max LLM calls a single subagent can make
-max_depth: 3                 # max recursive subagent depth
-truncate_len: 5000           # output characters shown to the LLM per step
-primary_agent: "z-ai/glm-5" # model used for the root agent
-sub_agent: "minimax/minimax-m2.5"  # model used for child subagents
-max_money_spent: 1.0         # hard budget cap in USD — crashes if exceeded
+max_calls_per_subagent: 20
+max_depth: 3
+truncate_len: 2000
+primary_agent: "z-ai/glm-5"
+sub_agent: "minimax/minimax-m2.5"
+max_money_spent: 1.0
 ```
 
-Edit this file to change any setting before running. If the file is missing, built-in defaults are used.
-
----
-
-## Running Examples
-
-A working example is in `test_counting_r.ts`. Run it with:
+### 5. Running
 
 ```bash
+# Run the example
 deno task test_counting_r
-```
 
-To write your own script, copy `test_counting_r.ts` and edit the `PROMPT` and `PREFIX` constants at the top. Then run it directly:
+# Run the subagent directly
+echo "What is 2+2?" | deno task subagent
 
-```bash
-FORCE_COLOR=1 deno run --allow-read --allow-env --allow-net --allow-sys=hostname --allow-write your_script.ts
-```
-
-Or add it as a task in `deno.json` the same way `test_counting_r` is defined.
-
----
-
-## Running Benchmarks
-
-First install Python dependencies (only needed for benchmarks):
-
-```bash
-uv sync
-```
-
-All benchmarks are under `benchmarks/` and use `uv run`:
-
-```bash
-uv run benchmarks/oolong_synth_benchmark.py
-uv run benchmarks/longbench_benchmark.py
-```
-
----
-
-## Log Viewer
-
-![TUI Log Viewer](images/tui.jpeg)
-
-Every run saves a `.jsonl` log file to `logs/`. Use the `viewlog` script to open it in the interactive TUI viewer:
-
-```bash
+# View logs
 ./viewlog logs/<logfile>.jsonl
 ```
 
-You can also pass just the filename if the log is in the `logs/` directory:
+### 6. Benchmarks
 
 ```bash
-./viewlog my_run_abc123.jsonl
+uv sync --extra benchmarks
+uv run benchmarks/oolong_synth_benchmark.py
+uv run benchmarks/longbench_benchmark.py
 ```
-
-Run `./viewlog` with no arguments to list recent logs.
-
-### Installing the log viewer (OpenTUI app)
-
-The viewer is a Bun + OpenTUI app in `tui_log_viewer/`. Install its dependencies once:
-
-```bash
-cd tui_log_viewer && bun install
-```
-
-After that `./viewlog` handles launching it automatically.

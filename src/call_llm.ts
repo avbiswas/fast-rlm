@@ -17,15 +17,23 @@ interface CodeReturn {
     usage: Usage;
 }
 
-const apiKey = Deno.env.get("OPENROUTER_API_KEY");
+const apiKey = Deno.env.get("RLM_MODEL_API_KEY") || Deno.env.get("OPENROUTER_API_KEY");
+const baseURL = Deno.env.get("RLM_MODEL_BASE_URL") || "https://openrouter.ai/api/v1";
+
+if (!apiKey) {
+    throw new Error(
+        "RLM_MODEL_API_KEY environment variable is missing or empty. " +
+        "Set it to your API key, e.g.: export RLM_MODEL_API_KEY='sk-...'"
+    );
+}
 
 export async function generate_code(
     messages: any[],
     model_name: string
 ): Promise<CodeReturn> {
     const client = new OpenAI({
-        apiKey: apiKey,
-        baseURL: "https://openrouter.ai/api/v1",
+        apiKey,
+        baseURL,
     });
     const completion = await client.chat.completions.create({
         // model: "openai/gpt-5.2-codex",

@@ -4,4 +4,6 @@
 *envrc
 *pyc
 *__pycache__*
+dist/
+site/
 logs/*

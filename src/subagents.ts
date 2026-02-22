@@ -17,7 +17,10 @@ interface RlmConfig {
 
 function loadConfig(): RlmConfig {
     try {
-        const configPath = new URL("../rlm_config.yaml", import.meta.url).pathname;
+        const configIdx = Deno.args.indexOf("--config");
+        const configPath = configIdx !== -1 && Deno.args[configIdx + 1]
+            ? Deno.args[configIdx + 1]
+            : new URL("../rlm_config.yaml", import.meta.url).pathname;
         const raw = Deno.readTextFileSync(configPath);
         return (parseYaml(raw) as RlmConfig) ?? {};
     } catch {
@@ -252,9 +255,18 @@ if (import.meta.main) {
         }
 
         if (outputFile) {
+            const totalUsage = getTotalUsage();
             await Deno.writeTextFile(outputFile, JSON.stringify({
                 results: out ?? null,
                 log_file: logFile ?? null,
+                usage: {
+                    prompt_tokens: totalUsage.prompt_tokens,
+                    completion_tokens: totalUsage.completion_tokens,
+                    total_tokens: totalUsage.total_tokens,
+                    cached_tokens: totalUsage.cached_tokens,
+                    reasoning_tokens: totalUsage.reasoning_tokens,
+                    cost: totalUsage.cost,
+                },
                 ...(fatalError ? { error: fatalError } : {}),
             }));
         }
