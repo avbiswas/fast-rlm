@@ -1,5 +1,7 @@
 # Quick Start
 
+![Quickstart](../images/quickstart.jpeg)
+
 ## Basic usage
 
 ```python

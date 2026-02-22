@@ -48,6 +48,8 @@ By default, fast-rlm uses [OpenRouter](https://openrouter.ai). You can point it 
 
 ## Quick Start
 
+![Quickstart](docs/images/quickstart.jpeg)
+
 ```python
 import fast_rlm
 
@@ -87,7 +89,7 @@ All config fields:
 
 ## Log Viewer
 
-![TUI Log Viewer](images/tui.jpeg)
+![TUI Log Viewer](docs/images/tui.jpeg)
 
 Every run saves a `.jsonl` log file to `logs/`.
 
