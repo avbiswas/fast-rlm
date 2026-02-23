@@ -57,10 +57,22 @@ def _check_deno():
     if shutil.which("deno") is None:
         raise RuntimeError(
             "Deno is required but not found on PATH.\n"
-            "Install it on (Mac/Linux): curl -fsSL https://deno.land/install.sh | sh"
-            "Install it on (Windows): npm install -g deno"
+            "Install it on (Mac/Linux): curl -fsSL https://deno.land/install.sh | sh\n"
+            "Install it on (Windows): npm install -g deno\n"
             "Visit: https://docs.deno.com/runtime/getting_started/installation/ for more installation options"
         )
+
+def _deno_prefix_cmd() -> list[str]:
+    """Return a subprocess-safe Deno command prefix across platforms."""
+    deno = shutil.which("deno")
+    if deno is None:
+        raise RuntimeError("Deno is required but not found on PATH.")
+
+    # npm installs on Windows often expose deno as a .cmd shim.
+    # Python's subprocess can fail on that directly, so route via cmd.exe.
+    if os.name == "nt" and deno.lower().endswith(".cmd"):
+        return ["cmd", "/c", deno]
+    return [deno]
 
 
 def run(
@@ -84,9 +96,9 @@ def run(
     engine_dir = _find_engine_dir()
 
     output_file = tempfile.mktemp(suffix=".json")
+    log_dir = os.path.join(os.getcwd(), "logs")
 
-    cmd = [
-        "deno",
+    cmd = _deno_prefix_cmd() + [
         "run",
         "--allow-read",
         "--allow-env",
@@ -94,6 +106,8 @@ def run(
         "--allow-sys=hostname,osRelease",
         "--allow-write",
         "src/subagents.ts",
+        "--log-dir",
+        log_dir,
         "--output",
         output_file,
     ]
@@ -124,6 +138,8 @@ def run(
             cmd,
             input=query,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             cwd=str(engine_dir),
             stdout=None if verbose else subprocess.PIPE,
             stderr=None if verbose else subprocess.PIPE,

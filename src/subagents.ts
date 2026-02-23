@@ -1,7 +1,7 @@
 import { loadPyodide } from "pyodide";
 import { parse as parseYaml } from "@std/yaml";
 import { generate_code, Usage } from "./call_llm.ts";
-import { Logger, setLogPrefix, getLogFile } from "./logging.ts";
+import { Logger, setLogDir, setLogPrefix, getLogFile } from "./logging.ts";
 import { startSpinner, showGlobalUsage } from "./ui.ts";
 import { trackUsage, getTotalUsage, resetUsage } from "./usage.ts";
 import chalk from "npm:chalk@5";
@@ -225,6 +225,12 @@ if (import.meta.main) {
         setLogPrefix(Deno.args[prefixIdx + 1]);
     }
 
+    // Parse --log-dir flag
+    const logDirIdx = Deno.args.indexOf("--log-dir");
+    if (logDirIdx !== -1 && Deno.args[logDirIdx + 1]) {
+        setLogDir(Deno.args[logDirIdx + 1]);
+    }
+
     // Parse --output flag
     const outputIdx = Deno.args.indexOf("--output");
     const outputFile = outputIdx !== -1 ? Deno.args[outputIdx + 1] : null;
@@ -251,7 +257,7 @@ if (import.meta.main) {
         const logFile = getLogFile();
         if (logFile) {
             console.log(chalk.green(`\n📝 Log saved to: ${logFile}`));
-            console.log(chalk.dim(`   View with: ./viewlog ${logFile}`));
+            console.log(chalk.dim(`   View with: fast-rlm-log ${logFile} --tui`));
         }
 
         if (outputFile) {

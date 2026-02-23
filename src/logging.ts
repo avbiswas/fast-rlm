@@ -16,10 +16,16 @@ export type { StepData };
 let pinoLogger: pino.Logger;
 let currentLogFile: string | null = null;
 let logPrefix: string | null = null;
+let logDir = "./logs";
 
 /** Set a custom prefix for the log filename (call before any logging) */
 export function setLogPrefix(prefix: string) {
     logPrefix = prefix;
+}
+
+/** Set log directory path (call before any logging) */
+export function setLogDir(dir: string) {
+    logDir = dir;
 }
 
 /** Get the current log file path */
@@ -30,14 +36,14 @@ export function getLogFile(): string | null {
 function initPino() {
     if (!pinoLogger) {
         try {
-            Deno.mkdirSync("./logs", { recursive: true });
+            Deno.mkdirSync(logDir, { recursive: true });
         } catch {
             // Directory might exist
         }
 
         const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
         const prefix = logPrefix ? `${logPrefix}_` : "run_";
-        currentLogFile = `./logs/${prefix}${timestamp}.jsonl`;
+        currentLogFile = `${logDir}/${prefix}${timestamp}.jsonl`;
 
         pinoLogger = pino({
             level: "info",
