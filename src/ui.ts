@@ -96,7 +96,7 @@ export function printStep(data: StepData): void {
 
         const stepCost = usage?.cost !== undefined 
         ? `Step: ${chalk.green("$" + usage.cost.toFixed(6))}`
-        : `Step: ${chalk.green("Local/Free")}`;
+        : `Step: ${chalk.green("Local/Free/Unknown")}`;
         const totalCost = totalUsage ? ` | Total: ${chalk.bold.green("$" + totalUsage.cost.toFixed(6))}` : "";
         const usageText = usageParts.join(", ") + ` | ${stepCost}${totalCost}`;
 
