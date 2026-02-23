@@ -1,6 +1,12 @@
 # fast-rlm
 
+[![PyPI](https://img.shields.io/pypi/v/fast-rlm)](https://pypi.org/project/fast-rlm/)
+[![GitHub](https://img.shields.io/github/stars/avbiswas/fast-rlm)](https://github.com/avbiswas/fast-rlm)
+[![Docs](https://img.shields.io/badge/docs-avbiswas.github.io%2Ffast--rlm-blue)](https://avbiswas.github.io/fast-rlm/)
+
 A minimal implementation of Recursive Language Models (RLMs) using Deno and Pyodide.
+
+[GitHub](https://github.com/avbiswas/fast-rlm) | [Documentation](https://avbiswas.github.io/fast-rlm/) | [PyPI](https://pypi.org/project/fast-rlm/)
 
 > **Watch the full video on YouTube**
 > **[RLM Tutorial](https://youtu.be/nxaVvvrezbY)**
@@ -59,6 +65,25 @@ result = fast_rlm.run("Generate 50 fruits and count number of r")
 print(result["results"])
 print(result["usage"])
 ```
+
+## Arbitrarily Long Context
+
+The key idea behind RLMs is that the prompt can be arbitrarily long — far beyond any model's context window. The agent explores it programmatically through the REPL rather than trying to fit it all into a single call.
+
+```python
+import fast_rlm
+
+transcripts = open("lex_fridman_all_transcripts.txt").read()  # millions of tokens
+
+result = fast_rlm.run(
+    "Here are the transcripts of all Lex Fridman podcasts. "
+    "Summarize what the first 5 Machine Learning guests had to say about AGI.\n\n"
+    + transcripts
+)
+print(result["results"])
+```
+
+The agent will write code to search, filter, and chunk the transcripts on its own — no manual splitting required.
 
 ## Configuration
 

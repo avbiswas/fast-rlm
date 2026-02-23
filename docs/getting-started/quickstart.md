@@ -29,6 +29,25 @@ The returned dict contains:
 }
 ```
 
+## Arbitrarily long context
+
+The key idea behind RLMs is that the prompt can be arbitrarily long — far beyond any model's context window. The agent explores it programmatically through the REPL rather than trying to fit it all into a single call.
+
+```python
+import fast_rlm
+
+transcripts = open("lex_fridman_all_transcripts.txt").read()  # millions of tokens
+
+result = fast_rlm.run(
+    "Here are the transcripts of all Lex Fridman podcasts. "
+    "Summarize what the first 5 Machine Learning guests had to say about AGI.\n\n"
+    + transcripts
+)
+print(result["results"])
+```
+
+The agent will write code to search, filter, and chunk the transcripts on its own — no manual splitting required.
+
 ## With configuration
 
 ```python
