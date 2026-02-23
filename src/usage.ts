@@ -13,6 +13,12 @@ let globalUsage: Usage = {
     cost: 0,
 };
 
+// Parallel execution statistics
+let parallelStats = {
+    parallel_batches: 0,
+    total_parallel_queries: 0,
+};
+
 export function trackUsage(usage: Usage): void {
     globalUsage.prompt_tokens += usage.prompt_tokens;
     globalUsage.completion_tokens += usage.completion_tokens;
@@ -22,8 +28,17 @@ export function trackUsage(usage: Usage): void {
     globalUsage.cost += usage.cost;
 }
 
+export function trackParallelExecution(queryCount: number): void {
+    parallelStats.parallel_batches++;
+    parallelStats.total_parallel_queries += queryCount;
+}
+
 export function getTotalUsage(): Usage {
     return { ...globalUsage };
+}
+
+export function getParallelStats() {
+    return { ...parallelStats };
 }
 
 export function resetUsage(): void {
@@ -34,5 +49,9 @@ export function resetUsage(): void {
         cached_tokens: 0,
         reasoning_tokens: 0,
         cost: 0,
+    };
+    parallelStats = {
+        parallel_batches: 0,
+        total_parallel_queries: 0,
     };
 }

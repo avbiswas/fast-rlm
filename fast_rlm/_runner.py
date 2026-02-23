@@ -20,6 +20,8 @@ class RLMConfig:
     max_calls_per_subagent: int = 20
     truncate_len: int = 2000
     max_money_spent: float = 1.0
+    max_parallel_children: int = 5
+    parallel_batch_window_ms: int = 50
 
     @classmethod
     def default(cls) -> "RLMConfig":

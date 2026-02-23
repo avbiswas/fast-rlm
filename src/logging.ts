@@ -65,20 +65,23 @@ function generateRunId(): string {
 export class Logger {
     public readonly run_id: string;
     private parent_run_id?: string;
+    private parallel_group_id?: string;
     private depth: number;
     private maxSteps: number;
 
-    constructor(depth: number, maxSteps: number, parent_run_id?: string) {
+    constructor(depth: number, maxSteps: number, parent_run_id?: string, parallel_group_id?: string) {
         this.run_id = generateRunId();
         this.parent_run_id = parent_run_id;
+        this.parallel_group_id = parallel_group_id;
         this.depth = depth;
         this.maxSteps = maxSteps;
     }
 
-    logStep(data: Omit<StepData, "run_id" | "parent_run_id" | "depth" | "maxSteps" | "totalUsage">): void {
+    logStep(data: Omit<StepData, "run_id" | "parent_run_id" | "depth" | "maxSteps" | "totalUsage" | "parallel_group_id">): void {
         const fullData: StepData = {
             run_id: this.run_id,
             parent_run_id: this.parent_run_id,
+            parallel_group_id: this.parallel_group_id,
             depth: this.depth,
             maxSteps: this.maxSteps,
             totalUsage: getTotalUsage(), // Add running total
@@ -91,6 +94,7 @@ export class Logger {
         const log = initPino().child({
             run_id: this.run_id,
             parent_run_id: this.parent_run_id,
+            parallel_group_id: this.parallel_group_id,
             depth: this.depth,
             step,
         });

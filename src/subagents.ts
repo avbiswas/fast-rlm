@@ -2,8 +2,9 @@ import { loadPyodide } from "pyodide";
 import { parse as parseYaml } from "@std/yaml";
 import { generate_code, Usage } from "./call_llm.ts";
 import { Logger, setLogDir, setLogPrefix, getLogFile } from "./logging.ts";
-import { startSpinner, showGlobalUsage } from "./ui.ts";
-import { trackUsage, getTotalUsage, resetUsage } from "./usage.ts";
+import { startSpinner, showGlobalUsage, showParallelExecution } from "./ui.ts";
+import { trackUsage, getTotalUsage, resetUsage, trackParallelExecution } from "./usage.ts";
+import { ParallelExecutor, ParallelConfig, generateParallelGroupId } from "./parallel.ts";
 import chalk from "npm:chalk@5";
 
 interface RlmConfig {
@@ -13,6 +14,8 @@ interface RlmConfig {
     primary_agent?: string;
     sub_agent?: string;
     max_money_spent?: number;
+    max_parallel_children?: number;
+    parallel_batch_window_ms?: number;
 }
 
 function loadConfig(): RlmConfig {
@@ -35,6 +38,8 @@ const TRUNCATE_LEN = _config.truncate_len ?? 5000;
 const PRIMARY_AGENT = _config.primary_agent ?? "z-ai/glm-5";
 const SUB_AGENT = _config.sub_agent ?? "minimax/minimax-m2.5";
 const MAX_MONEY_SPENT = _config.max_money_spent ?? Infinity;
+const MAX_PARALLEL_CHILDREN = _config.max_parallel_children ?? 5;
+const PARALLEL_BATCH_WINDOW_MS = _config.parallel_batch_window_ms ?? 50;
 
 function truncateText(text: string): string {
     let truncatedOutput = "";
@@ -56,9 +61,10 @@ function truncateText(text: string): string {
 export async function subagent(
     context: string,
     subagent_depth = 0,
-    parent_run_id?: string
+    parent_run_id?: string,
+    parallel_group_id?: string
 ) {
-    const logger = new Logger(subagent_depth, MAX_CALLS, parent_run_id);
+    const logger = new Logger(subagent_depth, MAX_CALLS, parent_run_id, parallel_group_id);
 
     const model_name = subagent_depth == 0 ? PRIMARY_AGENT : SUB_AGENT;
     let stdoutBuffer = "";
@@ -71,17 +77,39 @@ export async function subagent(
     });
     console.log("✔ Python Ready");
 
+    // Create parallel executor for batching concurrent llm_query calls
+    const parallelConfig: ParallelConfig = {
+        maxParallelChildren: MAX_PARALLEL_CHILDREN,
+        batchWindowMs: PARALLEL_BATCH_WINDOW_MS,
+        maxBudget: MAX_MONEY_SPENT - getTotalUsage().cost,
+        currentDepth: subagent_depth,
+        maxDepth: MAX_DEPTH,
+    };
+
+    const parallelExecutor = new ParallelExecutor(
+        parallelConfig,
+        async (childContext: string, pgId?: string) => {
+            return await subagent(childContext, subagent_depth + 1, logger.run_id, pgId);
+        },
+        {
+            onParallelStart: (groupId, count) => {
+                showParallelExecution(subagent_depth, groupId, count, "start");
+                trackParallelExecution(count);
+            },
+            onParallelComplete: (groupId, result) => {
+                showParallelExecution(subagent_depth, groupId, result.queryCount, "complete", result.executionTimeMs);
+            },
+        }
+    );
+
     const llm_query = async (context: string) => {
         if (subagent_depth >= MAX_DEPTH) {
             stdoutBuffer += "\nError: MAXIMUM DEPTH REACHED. You must solve this task on your own without calling llm_query.\n";
             throw new Error("MAXIMUM DEPTH REACHED. You must solve this task on your own without calling llm_query.");
         }
-        // if (context.length < 1000) {
-        //     stdoutBuffer += `\nError: Context passed to llm_query is too short (${context.length} chars). This likely means you forgot to attach the actual context/data. Make sure you include the relevant context when calling llm_query().\n`;
-        //     throw new Error(`Context too short (${context.length} chars). Ensure you have attached the context to llm_query().`);
-        // }
+        // Queue the query - the executor will batch concurrent calls
         console.log("↳ llm_query called");
-        const output = await subagent(context, subagent_depth + 1, logger.run_id);
+        const output = await parallelExecutor.queueQuery(context);
         return output;
     };
     pyodide.globals.set("llm_query", llm_query);

@@ -29,6 +29,7 @@ function boxWidth(depth: number): number {
 export interface StepData {
     run_id: string;
     parent_run_id?: string;
+    parallel_group_id?: string;
     depth: number;
     step: number;
     maxSteps: number;
@@ -41,12 +42,13 @@ export interface StepData {
 }
 
 export function printStep(data: StepData): void {
-    const { depth, step, maxSteps, code, output, hasError, usage, totalUsage } = data;
+    const { depth, step, maxSteps, code, output, hasError, usage, totalUsage, parallel_group_id } = data;
     const w = boxWidth(depth);
     const parts: string[] = [];
 
-    // Header rule
-    const title = ` Depth ${depth} · Step ${step}/${maxSteps} `;
+    // Header rule with optional parallel indicator
+    const parallelBadge = parallel_group_id ? chalk.magenta(` ⚡ ${parallel_group_id.slice(0, 8)}`) : "";
+    const title = ` Depth ${depth} · Step ${step}/${maxSteps}${parallelBadge} `;
     const side = Math.max(2, Math.floor((w - title.length) / 2));
     parts.push(chalk.bold.blue(`${"─".repeat(side)}${title}${"─".repeat(side)}`));
 
@@ -137,6 +139,29 @@ export function showFinalResult(result: unknown, depth: number): void {
 
 export function startSpinner(text: string) {
     return yoctoSpinner({ text }).start();
+}
+
+export function showParallelExecution(
+    depth: number,
+    groupId: string,
+    count: number,
+    phase: "start" | "complete",
+    executionTimeMs?: number
+): void {
+    const shortId = groupId.slice(0, 12);
+    
+    if (phase === "start") {
+        const message = chalk.magenta.bold(
+            `⚡ Parallel Execution Started: ${count} sub-agents in group ${shortId}`
+        );
+        console.log(indent(message, depth));
+    } else {
+        const timeStr = executionTimeMs ? ` (${(executionTimeMs / 1000).toFixed(2)}s)` : "";
+        const message = chalk.magenta.bold(
+            `✓ Parallel Execution Complete: ${count} sub-agents in group ${shortId}${timeStr}`
+        );
+        console.log(indent(message, depth));
+    }
 }
 
 export function showGlobalUsage(totalUsage: Usage): void {
