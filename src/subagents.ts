@@ -38,7 +38,6 @@ const MAX_MONEY_SPENT = _config.max_money_spent ?? Infinity;
 
 function truncateText(text: string): string {
     let truncatedOutput = "";
-    console.log(text.length);
     if (text.length > TRUNCATE_LEN) {
         truncatedOutput = `[TRUNCATED: Last ${TRUNCATE_LEN} chars shown].. ` + text.slice(-TRUNCATE_LEN);
     } else {
@@ -53,14 +52,20 @@ function truncateText(text: string): string {
 
 }
 
+function now(): string {
+    return new Date().toISOString();
+}
+
 export async function subagent(
     context: string,
     subagent_depth = 0,
     parent_run_id?: string
 ) {
     const logger = new Logger(subagent_depth, MAX_CALLS, parent_run_id);
+    logger.logAgentStart();
 
     const model_name = subagent_depth == 0 ? PRIMARY_AGENT : SUB_AGENT;
+    const is_leaf_agent = subagent_depth == MAX_DEPTH;
     let stdoutBuffer = "";
 
     const pyodide = await loadPyodide({
@@ -114,7 +119,9 @@ else:
     print(f"Context: ", context)
 `
     stdoutBuffer = "";
+    const step0ExecStart = now();
     await pyodide.runPythonAsync(initial_code);
+    const step0ExecEnd = now();
     let messages = [
         {
             "role": "user", "content": `
@@ -140,12 +147,18 @@ Output:\n${stdoutBuffer.trim()}
         code: initial_code,
         output: stdoutBuffer.trim(),
         hasError: false,
-        usage: noUsage
+        usage: noUsage,
+        timestamps: {
+            execution_start: step0ExecStart,
+            execution_end: step0ExecEnd,
+        }
     });
 
     for (let i = 0; i < MAX_CALLS; i++) {
+        const llmCallStart = now();
         const llmSpinner = startSpinner("Generating code...");
-        const { code, success, message, usage } = await generate_code(messages, model_name);
+        const { code, success, message, usage } = await generate_code(messages, model_name, is_leaf_agent);
+        const llmCallEnd = now();
         messages.push(message);
 
         // Track usage globally
@@ -158,7 +171,10 @@ Output:\n${stdoutBuffer.trim()}
         llmSpinner.success("Code generated");
 
         if (!success) {
-            logger.logStep({ step: i + 1, code, reasoning: message.reasoning, usage });
+            logger.logStep({
+                step: i + 1, code, reasoning: message.reasoning, usage,
+                timestamps: { llm_call_start: llmCallStart, llm_call_end: llmCallEnd },
+            });
 
             messages.push({
                 "role": "user",
@@ -167,12 +183,10 @@ Output:\n${stdoutBuffer.trim()}
             });
             continue
         }
-
-        console.log(message.reasoning);
-
         // Reset stdout buffer for this execution
         stdoutBuffer = "";
 
+        const execStart = now();
         try {
             await pyodide.runPythonAsync(code);
         } catch (error) {
@@ -182,17 +196,25 @@ Output:\n${stdoutBuffer.trim()}
                 stdoutBuffer += `\nError: ${error} `;
             }
         }
+        const execEnd = now();
         let truncatedText = truncateText(stdoutBuffer);
 
+        const stepTimestamps = {
+            llm_call_start: llmCallStart,
+            llm_call_end: llmCallEnd,
+            execution_start: execStart,
+            execution_end: execEnd,
+        };
 
         const finalResult = pyodide.globals.get("__final_result__");
         if (finalResult !== undefined) {
-            logger.logStep({ step: i + 1, code, reasoning: message.reasoning, usage });
+            logger.logStep({ step: i + 1, code, reasoning: message.reasoning, usage, timestamps: stepTimestamps });
             let result = finalResult;
             if (result && typeof result.toJs === 'function') {
                 result = result.toJs();
             }
             logger.logFinalResult(result);
+            logger.logAgentEnd();
             return result;
         }
 
@@ -203,7 +225,8 @@ Output:\n${stdoutBuffer.trim()}
             output: truncatedText,
             hasError,
             reasoning: message.reasoning,
-            usage
+            usage,
+            timestamps: stepTimestamps,
         });
 
 
@@ -213,6 +236,7 @@ Output:\n${stdoutBuffer.trim()}
         });
     }
 
+    logger.logAgentEnd();
     throw new Error("Did not finish the function stack before subagent died");
 }
 

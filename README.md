@@ -211,3 +211,12 @@ uv sync --extra benchmarks
 uv run benchmarks/oolong_synth_benchmark.py
 uv run benchmarks/longbench_benchmark.py
 ```
+
+---
+
+## Contributing
+
+- **Small PRs only** — keep changes focused and minimal. Large PRs will not be accepted.
+- **No LLM-generated slop** — AI-assisted code is fine, but bulk-generated boilerplate with no thought behind it will be rejected.
+- **Minor features welcome** — small, well-scoped PRs that add useful functionality will be considered.
+- **Large feature requests** — open an issue first to discuss the design before writing any code.

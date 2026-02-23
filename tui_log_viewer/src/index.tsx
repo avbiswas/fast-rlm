@@ -16,6 +16,13 @@ interface Usage {
   cost: number;
 }
 
+interface StepTimestamps {
+  llm_call_start?: string;
+  llm_call_end?: string;
+  execution_start?: string;
+  execution_end?: string;
+}
+
 interface LogEntry {
   level: number;
   time: string;
@@ -23,13 +30,14 @@ interface LogEntry {
   parent_run_id?: string;
   depth: number;
   step?: number;
-  event_type: "execution_result" | "code_generated" | "final_result";
+  event_type: "execution_result" | "code_generated" | "final_result" | "agent_start" | "agent_end";
   code?: string;
   output?: string;
   hasError?: boolean;
   reasoning?: string;
   usage?: Usage;
   result?: unknown;
+  timestamps?: StepTimestamps;
 }
 
 interface RunTree {
@@ -39,11 +47,13 @@ interface RunTree {
   steps: LogEntry[];
   children: RunTree[];
   finalResult?: unknown;
+  agentStartTime?: string;
+  agentEndTime?: string;
 }
 
 // ── Log Parsing ──────────────────────────────────────────────────────
 
-function parseLogFile(content: string): { rootRuns: RunTree[]; runs: Map<string, RunTree> } {
+function parseLogFile(content: string): { rootRuns: RunTree[]; runs: Map<string, RunTree>; hasTimestamps: boolean } {
   const lines = content.trim().split("\n");
   const entries: LogEntry[] = [];
 
@@ -57,6 +67,7 @@ function parseLogFile(content: string): { rootRuns: RunTree[]; runs: Map<string,
   }
 
   const runs = new Map<string, RunTree>();
+  let hasTimestamps = false;
 
   for (const entry of entries) {
     if (!runs.has(entry.run_id)) {
@@ -74,10 +85,16 @@ function parseLogFile(content: string): { rootRuns: RunTree[]; runs: Map<string,
     if (!run.parent_run_id && entry.parent_run_id) {
       run.parent_run_id = entry.parent_run_id;
     }
-    if (entry.event_type === "final_result") {
+    if (entry.event_type === "agent_start") {
+      run.agentStartTime = entry.time;
+      hasTimestamps = true;
+    } else if (entry.event_type === "agent_end") {
+      run.agentEndTime = entry.time;
+    } else if (entry.event_type === "final_result") {
       run.finalResult = entry.result;
     } else {
       run.steps.push(entry);
+      if (entry.timestamps) hasTimestamps = true;
     }
   }
 
@@ -99,7 +116,7 @@ function parseLogFile(content: string): { rootRuns: RunTree[]; runs: Map<string,
     run.steps.sort((a, b) => (a.step ?? 0) - (b.step ?? 0));
   }
 
-  return { rootRuns, runs };
+  return { rootRuns, runs, hasTimestamps };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -186,6 +203,127 @@ function getRootFinalResult(rootRuns: RunTree[]): unknown {
     if (r.finalResult !== undefined) return r.finalResult;
   }
   return undefined;
+}
+
+// ── Timeline Data ────────────────────────────────────────────────────
+
+interface StepPhases {
+  llmStart?: number;
+  llmEnd?: number;
+  execStart?: number;
+  execEnd?: number;
+}
+
+interface TimelineAgent {
+  run_id: string;
+  shortId: string;
+  depth: number;
+  parentRunId?: string;
+  startTime: number;
+  endTime: number;
+  numSteps: number;
+  isLastChild: boolean;
+  stepPhases: StepPhases[];
+}
+
+interface TimelineData {
+  agents: TimelineAgent[];
+  globalStart: number;
+  globalEnd: number;
+}
+
+function buildTimelineData(runs: Map<string, RunTree>, rootRuns: RunTree[]): TimelineData {
+  const agents: TimelineAgent[] = [];
+
+  function getRunTimeRange(run: RunTree): { start: number; end: number } | null {
+    // Prefer agent_start/agent_end timestamps when available
+    const agentStart = run.agentStartTime ? new Date(run.agentStartTime).getTime() : null;
+    const agentEnd = run.agentEndTime ? new Date(run.agentEndTime).getTime() : null;
+
+    // Gather all known timestamps from steps for fallback/bounds
+    const stepTimes: number[] = [];
+    for (const s of run.steps) {
+      stepTimes.push(new Date(s.time).getTime());
+      if (s.timestamps?.llm_call_start) stepTimes.push(new Date(s.timestamps.llm_call_start).getTime());
+      if (s.timestamps?.execution_end) stepTimes.push(new Date(s.timestamps.execution_end).getTime());
+    }
+
+    if (stepTimes.length === 0 && agentStart === null) return null;
+
+    const start = agentStart ?? (stepTimes.length > 0 ? Math.min(...stepTimes) : 0);
+    const end = agentEnd ?? (stepTimes.length > 0 ? Math.max(...stepTimes) : start);
+
+    return { start, end };
+  }
+
+  function walk(run: RunTree, isLastChild: boolean) {
+    const range = getRunTimeRange(run);
+    if (!range) return;
+
+    // Build per-step phases with detailed timestamps
+    const stepPhases: StepPhases[] = [];
+    for (let i = 0; i < run.steps.length; i++) {
+      const step = run.steps[i]!;
+      const ts = step.timestamps;
+
+      if (ts) {
+        stepPhases.push({
+          llmStart: ts.llm_call_start ? new Date(ts.llm_call_start).getTime() : undefined,
+          llmEnd: ts.llm_call_end ? new Date(ts.llm_call_end).getTime() : undefined,
+          execStart: ts.execution_start ? new Date(ts.execution_start).getTime() : undefined,
+          execEnd: ts.execution_end ? new Date(ts.execution_end).getTime() : undefined,
+        });
+      } else {
+        // Legacy fallback: treat entire step as a single block
+        const stepStart = i > 0
+          ? new Date(run.steps[i - 1]!.time).getTime()
+          : range.start;
+        const stepEnd = new Date(step.time).getTime();
+        stepPhases.push({ llmStart: stepStart, execEnd: stepEnd });
+      }
+    }
+
+    agents.push({
+      run_id: run.run_id,
+      shortId: shortId(run.run_id),
+      depth: run.depth,
+      parentRunId: run.parent_run_id,
+      startTime: range.start,
+      endTime: range.end,
+      numSteps: run.steps.length,
+      isLastChild,
+      stepPhases,
+    });
+
+    // Sort children by start time
+    const sortedChildren = [...run.children].sort((a, b) => {
+      const aRange = getRunTimeRange(a);
+      const bRange = getRunTimeRange(b);
+      return (aRange?.start ?? 0) - (bRange?.start ?? 0);
+    });
+
+    for (let i = 0; i < sortedChildren.length; i++) {
+      walk(sortedChildren[i]!, i === sortedChildren.length - 1);
+    }
+  }
+
+  for (let i = 0; i < rootRuns.length; i++) {
+    walk(rootRuns[i]!, i === rootRuns.length - 1);
+  }
+
+  let globalStart = Infinity;
+  let globalEnd = -Infinity;
+  for (const a of agents) {
+    if (a.startTime < globalStart) globalStart = a.startTime;
+    if (a.endTime > globalEnd) globalEnd = a.endTime;
+  }
+
+  if (!isFinite(globalStart)) {
+    globalStart = 0;
+    globalEnd = 0;
+  }
+
+  return { agents, globalStart, globalEnd };
 }
 
 // ── Tree Item type for left panel ────────────────────────────────────
@@ -610,20 +748,222 @@ function ScrollableModal({
   );
 }
 
-function HelpBar({ width }: { width: number }) {
+// ── Timeline View ────────────────────────────────────────────────────
+
+// Bright = execution, Dim = LLM call, label color
+const DEPTH_COLORS = ["#7aa2f7", "#50fa7b", "#f1fa8c", "#ff79c6", "#bd93f9", "#8be9fd", "#ffb86c"];
+// Dimmer shade for LLM call phase (thinking/waiting for API)
+const DEPTH_LLM_COLORS = ["#3d5179", "#287d3d", "#79804e", "#804060", "#5e4a7d", "#456575", "#805c36"];
+
+function formatDuration(ms: number): string {
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(0)}s`;
+  const m = Math.floor(s / 60);
+  const rem = Math.floor(s % 60);
+  return `${m}m${rem}s`;
+}
+
+function TimelineView({
+  data,
+  vScroll,
+  width,
+  height,
+}: {
+  data: TimelineData;
+  vScroll: number;
+  width: number;
+  height: number;
+}) {
+  const { agents, globalStart, globalEnd } = data;
+  const totalDuration = globalEnd - globalStart;
+
+  // Budget: label | bar | suffix — all must fit in width minus border padding
+  const innerWidth = width - 2; // border left + right
+  const suffixWidth = 22; // " (NN steps, NNmNNs)"
+  const labelWidth = Math.min(28, Math.floor(innerWidth * 0.25));
+  const chartWidth = Math.max(1, innerWidth - labelWidth - suffixWidth);
+
+  const headerLines = 2; // axis + separator
+  const footerLines = 1;
+  const availableRows = Math.max(1, height - headerLines - footerLines - 2); // -2 for border
+
+  const visibleAgents = agents.slice(vScroll, vScroll + availableRows);
+
+  // Map time (ms offset from globalStart) to character column [0, chartWidth)
+  function timeToChar(ms: number): number {
+    if (totalDuration === 0) return 0;
+    return Math.round((ms / totalDuration) * (chartWidth - 1));
+  }
+
+  // Build time axis header — a few evenly spaced tick labels
+  function buildTimeAxis(): string {
+    const axis = new Array(chartWidth).fill(" ");
+    // Aim for ~5-7 ticks across the width
+    const numTicks = Math.max(2, Math.min(7, Math.floor(chartWidth / 12)));
+    for (let ti = 0; ti <= numTicks; ti++) {
+      const frac = ti / numTicks;
+      const charPos = Math.round(frac * (chartWidth - 1));
+      const timeMs = frac * totalDuration;
+      const label = `+${formatDuration(timeMs)}`;
+      for (let c = 0; c < label.length && charPos + c < chartWidth; c++) {
+        axis[charPos + c] = label[c]!;
+      }
+    }
+    return axis.join("");
+  }
+
+  // Build a bar for an agent — LLM call phases shown as dim shade,
+  // execution phases as bright shade, gaps left as empty (black)
+  function buildBar(agent: TimelineAgent): { chars: string[]; colors: string[] } {
+    const chars = new Array(chartWidth).fill(" ");
+    const colors = new Array(chartWidth).fill("");
+
+    const llmColor = DEPTH_COLORS[agent.depth % DEPTH_COLORS.length]!;
+    const execColor = DEPTH_LLM_COLORS[agent.depth % DEPTH_LLM_COLORS.length]!;
+
+    function fillRange(fromMs: number, toMs: number, color: string) {
+      const c0 = Math.max(0, timeToChar(fromMs - globalStart));
+      const c1 = Math.min(chartWidth - 1, timeToChar(toMs - globalStart));
+      for (let c = c0; c <= c1; c++) {
+        chars[c] = "█";
+        colors[c] = color;
+      }
+    }
+
+    for (const phase of agent.stepPhases) {
+      // LLM call phase (dim)
+      if (phase.llmStart != null && phase.llmEnd != null) {
+        fillRange(phase.llmStart, phase.llmEnd, llmColor);
+      }
+      // Execution phase (bright)
+      if (phase.execStart != null && phase.execEnd != null) {
+        fillRange(phase.execStart, phase.execEnd, execColor);
+      }
+      // Legacy fallback: if only llmStart+execEnd (no split), draw as bright
+      if (phase.llmEnd == null && phase.execStart == null && phase.llmStart != null && phase.execEnd != null) {
+        fillRange(phase.llmStart, phase.execEnd, execColor);
+      }
+    }
+
+    // Ensure at least 1 char visible for very short agents
+    const startChar = timeToChar(agent.startTime - globalStart);
+    if (startChar >= 0 && startChar < chartWidth && chars[startChar] === " ") {
+      chars[startChar] = "▪";
+      colors[startChar] = execColor;
+    }
+
+    return { chars, colors };
+  }
+
+  // Build label with tree connectors
+  function buildLabel(agent: TimelineAgent): string {
+    const indent = agent.depth * 2;
+    let prefix = "";
+    if (agent.depth > 0) {
+      prefix = " ".repeat(Math.max(0, indent - 2));
+      prefix += agent.isLastChild ? "└─" : "├─";
+    }
+    const id = `${agent.shortId} d${agent.depth}`;
+    const label = `${prefix}${prefix ? " " : ""}${id}`;
+    return truncate(label, labelWidth).padEnd(labelWidth);
+  }
+
+  const timeAxis = buildTimeAxis();
+
+  // Detect parallel groups: agents sharing a parent whose time ranges overlap
+  const countedParents = new Set<string>();
+  let parallelCount = 0;
+  for (let i = 0; i < agents.length; i++) {
+    const a = agents[i]!;
+    if (!a.parentRunId || countedParents.has(a.parentRunId)) continue;
+    for (let j = i + 1; j < agents.length; j++) {
+      const b = agents[j]!;
+      if (
+        b.parentRunId === a.parentRunId &&
+        a.startTime < b.endTime &&
+        b.startTime < a.endTime
+      ) {
+        parallelCount++;
+        countedParents.add(a.parentRunId);
+        break;
+      }
+    }
+  }
+
   return (
-    <box width={width} flexDirection="row" gap={1}>
-      <text fg="#888888">
-        <span fg="#7aa2f7">↑↓</span>:steps  <span fg="#7aa2f7">←→</span>:parent/child  <span fg="#7aa2f7">Tab/S-Tab</span>:siblings  <span fg="#7aa2f7">H/J</span>:code  <span fg="#7aa2f7">K/L</span>:output  <span fg="#7aa2f7">R</span>:reasoning  <span fg="#7aa2f7">O</span>:final output  <span fg="#7aa2f7">q/^C</span>:quit
+    <box
+      border
+      borderStyle="rounded"
+      borderColor="#7aa2f7"
+      title="  TIMELINE (T to close, ↑↓ scroll)  "
+      titleAlignment="center"
+      flexDirection="column"
+      width={width}
+      height={height}
+    >
+      {/* Time axis */}
+      <text fg="#555555">{" ".repeat(labelWidth)}{timeAxis}</text>
+      <text fg="#444444">{" ".repeat(labelWidth)}{"─".repeat(chartWidth)}</text>
+
+      {/* Agent rows */}
+      {visibleAgents.map((agent, vi) => {
+        const label = buildLabel(agent);
+        const { chars, colors } = buildBar(agent);
+        const duration = formatDuration(agent.endTime - agent.startTime);
+        const suffix = ` (${agent.numSteps}st, ${duration})`;
+
+        return (
+          <text key={`tl-${vScroll + vi}`}>
+            <span fg={DEPTH_COLORS[agent.depth % DEPTH_COLORS.length]}>{label}</span>
+            {chars.map((ch, ci) => (
+              <span key={ci} fg={colors[ci]}>{ch}</span>
+            ))}
+            <span fg="#666666">{truncate(suffix, suffixWidth)}</span>
+          </text>
+        );
+      })}
+
+      {/* Fill empty rows */}
+      {visibleAgents.length < availableRows &&
+        Array.from({ length: availableRows - visibleAgents.length }, (_, i) => (
+          <text key={`empty-${i}`}> </text>
+        ))}
+
+      {/* Footer */}
+      <text>
+        <span fg="#555555">{"  "}</span>
+        <span fg={DEPTH_COLORS[0]}>{"██"}</span><span fg="#555555">{" LLM  "}</span>
+        <span fg={DEPTH_LLM_COLORS[0]}>{"██"}</span><span fg="#555555">{" Exec  "}</span>
+        <span fg="#555555">{"   "}blank=idle | {agents.length} agents | {formatDuration(totalDuration)} total | {parallelCount} parallel group{parallelCount !== 1 ? "s" : ""}</span>
+        {agents.length > availableRows && <span fg="#555555"> | rows {vScroll + 1}-{Math.min(vScroll + availableRows, agents.length)}/{agents.length}</span>}
       </text>
     </box>
   );
 }
 
-function App({ logData }: { logData: { rootRuns: RunTree[]; runs: Map<string, RunTree> } }) {
+function HelpBar({ width, showTimeline, hasTimestamps }: { width: number; showTimeline?: boolean; hasTimestamps?: boolean }) {
+  if (showTimeline) {
+    return (
+      <box width={width} flexDirection="row" gap={1}>
+        <text fg="#888888">
+          <span fg="#7aa2f7">↑↓</span>:scroll  <span fg="#7aa2f7">T/Esc</span>:close  <span fg="#7aa2f7">q/^C</span>:quit
+        </text>
+      </box>
+    );
+  }
+  return (
+    <box width={width} flexDirection="row" gap={1}>
+      <text fg="#888888">
+        <span fg="#7aa2f7">↑↓</span>:steps  <span fg="#7aa2f7">←→</span>:parent/child  <span fg="#7aa2f7">Tab/S-Tab</span>:siblings  <span fg="#7aa2f7">H/J</span>:code  <span fg="#7aa2f7">K/L</span>:output  <span fg="#7aa2f7">R</span>:reasoning  <span fg="#7aa2f7">O</span>:final output  {hasTimestamps && <><span fg="#7aa2f7">T</span>:timeline  </>}<span fg="#7aa2f7">q/^C</span>:quit
+      </text>
+    </box>
+  );
+}
+
+function App({ logData }: { logData: { rootRuns: RunTree[]; runs: Map<string, RunTree>; hasTimestamps: boolean } }) {
   const renderer = useRenderer();
   const { width, height } = useTerminalDimensions();
-  const { rootRuns, runs } = logData;
+  const { rootRuns, runs, hasTimestamps } = logData;
 
   const firstRun = rootRuns[0];
   if (!firstRun) {
@@ -643,6 +983,11 @@ function App({ logData }: { logData: { rootRuns: RunTree[]; runs: Map<string, Ru
   const [reasoningScroll, setReasoningScroll] = useState(0);
   const [showFullOutput, setShowFullOutput] = useState(false);
   const [fullOutputScroll, setFullOutputScroll] = useState(0);
+  const [showTimeline, setShowTimeline] = useState(false);
+  const [timelineVScroll, setTimelineVScroll] = useState(0);
+
+  // Timeline data
+  const timelineData = useMemo(() => buildTimelineData(runs, rootRuns), [runs, rootRuns]);
 
   // Track which runs are expanded (active run + its ancestors)
   const expandedRuns = useMemo(() => {
@@ -717,16 +1062,37 @@ function App({ logData }: { logData: { rootRuns: RunTree[]; runs: Map<string, Ru
       (key) => {
         // Quit
         if (key.name === "q" || (key.ctrl && key.name === "c")) {
+          if (showTimeline) { setShowTimeline(false); return; }
           if (showReasoning) { setShowReasoning(false); return; }
           if (showFullOutput) { setShowFullOutput(false); return; }
           renderer.destroy();
           return;
         }
 
-        // Esc - close any modal
+        // Esc - close any modal/timeline
         if (key.name === "escape") {
+          if (showTimeline) { setShowTimeline(false); return; }
           if (showReasoning) { setShowReasoning(false); return; }
           if (showFullOutput) { setShowFullOutput(false); return; }
+        }
+
+        // T - toggle timeline view (only when timestamp data is present)
+        if (key.name === "t" && hasTimestamps) {
+          setShowTimeline((v) => !v);
+          setShowReasoning(false);
+          setShowFullOutput(false);
+          setTimelineVScroll(0);
+          return;
+        }
+
+        // Timeline mode: Up/Down vertical scroll only
+        if (showTimeline) {
+          if (key.name === "up") {
+            setTimelineVScroll((s) => Math.max(0, s - 1));
+          } else if (key.name === "down") {
+            setTimelineVScroll((s) => Math.min(timelineData.agents.length - 1, s + 1));
+          }
+          return;
         }
 
         // R - toggle reasoning modal
@@ -872,62 +1238,72 @@ function App({ logData }: { logData: { rootRuns: RunTree[]; runs: Map<string, Ru
           return;
         }
       },
-      [activeRun, activeStepIndex, runs, showReasoning, showFullOutput],
+      [activeRun, activeStepIndex, runs, showReasoning, showFullOutput, showTimeline, timelineData, hasTimestamps],
     ),
   );
 
   return (
     <box position="relative" flexDirection="column" width="100%" height="100%">
-      {/* Main content */}
-      <box flexDirection="row" width="100%" height={mainHeight}>
-        {/* Left Panel - Tree */}
-        <LeftPanel
-          treeItems={treeItems}
-          cursorIndex={cursorIndex}
-          activeRunId={activeRunId}
-          activeStepIndex={activeStepIndex}
+      {/* Timeline view replaces main content when active */}
+      {showTimeline ? (
+        <TimelineView
+          data={timelineData}
+          vScroll={timelineVScroll}
+          width={width}
           height={mainHeight}
-          width={leftPanelWidth}
         />
-
-        {/* Right Panel */}
-        <box flexDirection="column" width={rightPanelWidth} height={mainHeight}>
-          {/* Info section - fixed height, clipped */}
-          <box
-            border
-            borderStyle="rounded"
-            borderColor="#555555"
-            title="  Info  "
-            titleAlignment="center"
-            flexDirection="column"
-            paddingLeft={1}
-            paddingRight={1}
-            height={infoHeight}
-            overflow="hidden"
-          >
-            <text>
-              <span fg="#888888">Result: </span>
-              <span fg="#bd93f9">{truncate(rootFinalResult !== undefined ? (typeof rootFinalResult === "object" ? JSON.stringify(rootFinalResult) : String(rootFinalResult)) : "N/A", rightPanelWidth - 14)}</span>
-              {activeStep?.hasError && <span fg="#ff5555"> ERROR</span>}
-            </text>
-            <UsageLine label="Step:" usage={activeStep?.usage} costColor="#f1fa8c" />
-            <UsageLine label="Total:" usage={globalUsage} costColor="#50fa7b" />
-          </box>
-
-          {/* Code + Output - fills remaining space */}
-          <CodeOutputPanel
-            code={activeStep?.code ?? ""}
-            output={effectiveOutput}
-            codeScroll={codeScroll}
-            outputScroll={outputScroll}
-            width={rightPanelWidth}
-            height={codeOutputHeight}
+      ) : (
+        /* Main content */
+        <box flexDirection="row" width="100%" height={mainHeight}>
+          {/* Left Panel - Tree */}
+          <LeftPanel
+            treeItems={treeItems}
+            cursorIndex={cursorIndex}
+            activeRunId={activeRunId}
+            activeStepIndex={activeStepIndex}
+            height={mainHeight}
+            width={leftPanelWidth}
           />
+
+          {/* Right Panel */}
+          <box flexDirection="column" width={rightPanelWidth} height={mainHeight}>
+            {/* Info section - fixed height, clipped */}
+            <box
+              border
+              borderStyle="rounded"
+              borderColor="#555555"
+              title="  Info  "
+              titleAlignment="center"
+              flexDirection="column"
+              paddingLeft={1}
+              paddingRight={1}
+              height={infoHeight}
+              overflow="hidden"
+            >
+              <text>
+                <span fg="#888888">Result: </span>
+                <span fg="#bd93f9">{truncate(rootFinalResult !== undefined ? (typeof rootFinalResult === "object" ? JSON.stringify(rootFinalResult) : String(rootFinalResult)) : "N/A", rightPanelWidth - 14)}</span>
+                {activeStep?.hasError && <span fg="#ff5555"> ERROR</span>}
+              </text>
+              <UsageLine label="Step:" usage={activeStep?.usage} costColor="#f1fa8c" />
+              <UsageLine label="Total:" usage={globalUsage} costColor="#50fa7b" />
+            </box>
+
+            {/* Code + Output - fills remaining space */}
+            <CodeOutputPanel
+              code={activeStep?.code ?? ""}
+              output={effectiveOutput}
+              codeScroll={codeScroll}
+              outputScroll={outputScroll}
+              width={rightPanelWidth}
+              height={codeOutputHeight}
+            />
+          </box>
         </box>
-      </box>
+      )}
 
       {/* Help bar */}
-      <HelpBar width={width} />
+      <HelpBar width={width} showTimeline={showTimeline} hasTimestamps={hasTimestamps} />
 
       {/* Reasoning modal */}
       {showReasoning && (

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fast-rlm"
-version = "0.1.8"
+version = "0.1.9"
 description = "Light-dependency, Feature-Rich Implementation of Recursive Language Models"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -26,6 +26,13 @@ function boxWidth(depth: number): number {
 
 // ── Step data dictionary ────────────────────────────────────────────
 
+export interface StepTimestamps {
+    llm_call_start?: string;
+    llm_call_end?: string;
+    execution_start?: string;
+    execution_end?: string;
+}
+
 export interface StepData {
     run_id: string;
     parent_run_id?: string;
@@ -38,6 +45,7 @@ export interface StepData {
     reasoning?: string; // LLM reasoning/thinking text
     usage: Usage;
     totalUsage?: Usage; // Running total across all steps
+    timestamps?: StepTimestamps;
 }
 
 export function printStep(data: StepData): void {

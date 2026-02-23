@@ -75,6 +75,26 @@ export class Logger {
         this.maxSteps = maxSteps;
     }
 
+    logAgentStart(): void {
+        initPino().child({
+            run_id: this.run_id,
+            parent_run_id: this.parent_run_id,
+            depth: this.depth,
+        }).info({
+            event_type: "agent_start",
+        });
+    }
+
+    logAgentEnd(): void {
+        initPino().child({
+            run_id: this.run_id,
+            parent_run_id: this.parent_run_id,
+            depth: this.depth,
+        }).info({
+            event_type: "agent_end",
+        });
+    }
+
     logStep(data: Omit<StepData, "run_id" | "parent_run_id" | "depth" | "maxSteps" | "totalUsage">): void {
         const fullData: StepData = {
             run_id: this.run_id,
@@ -85,7 +105,7 @@ export class Logger {
             ...data,
         };
 
-        const { step, code, output, hasError, reasoning, usage } = fullData;
+        const { step, code, output, hasError, reasoning, usage, timestamps } = fullData;
 
         // Log to Pino
         const log = initPino().child({
@@ -103,6 +123,7 @@ export class Logger {
                 hasError,
                 reasoning,
                 usage,
+                timestamps,
             });
         } else {
             log.info({
@@ -110,6 +131,7 @@ export class Logger {
                 code,
                 reasoning,
                 usage,
+                timestamps,
             });
         }
 

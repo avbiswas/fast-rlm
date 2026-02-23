@@ -1,5 +1,5 @@
 import { OpenAI } from "openai";
-import { SYSTEM_PROMPT } from "./prompt.ts";
+import { SYSTEM_PROMPT, LEAF_AGENT_SYSTEM_PROMPT } from "./prompt.ts";
 
 export interface Usage {
     prompt_tokens: number;
@@ -29,7 +29,8 @@ if (!apiKey) {
 
 export async function generate_code(
     messages: any[],
-    model_name: string
+    model_name: string,
+    is_leaf_agent: boolean
 ): Promise<CodeReturn> {
     const client = new OpenAI({
         apiKey,
@@ -41,7 +42,7 @@ export async function generate_code(
         // model: "minimax/minimax-m2.5",
         model: model_name,
         messages: [
-            { role: "system", content: SYSTEM_PROMPT },
+            { role: "system", content: is_leaf_agent ? LEAF_AGENT_SYSTEM_PROMPT : SYSTEM_PROMPT },
             ...messages
         ],
         reasoning: { 'effort': 'low' },
