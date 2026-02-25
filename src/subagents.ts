@@ -15,6 +15,8 @@ interface RlmConfig {
     max_money_spent?: number;
     max_completion_tokens?: number;
     max_prompt_tokens?: number;
+    api_max_retries?: number;
+    api_timeout_ms?: number;
 }
 
 function loadConfig(): RlmConfig {
@@ -39,6 +41,8 @@ const SUB_AGENT = _config.sub_agent ?? "minimax/minimax-m2.5";
 const MAX_MONEY_SPENT = _config.max_money_spent ?? Infinity;
 const MAX_COMPLETION_TOKENS = _config.max_completion_tokens ?? 50000;
 const MAX_PROMPT_TOKENS = _config.max_prompt_tokens ?? 200000;
+const API_MAX_RETRIES = _config.api_max_retries ?? 3;
+const API_TIMEOUT_MS = _config.api_timeout_ms ?? 30000;
 
 function truncateText(text: string): string {
     let truncatedOutput = "";
@@ -164,7 +168,10 @@ Output:\n${stdoutBuffer.trim()}
     for (let i = 0; i < MAX_CALLS; i++) {
         const llmCallStart = now();
         const llmSpinner = startSpinner("Generating code...");
-        const { code, success, message, usage } = await generate_code(messages, model_name, is_leaf_agent);
+        const { code, success, message, usage } = await generate_code(messages, model_name, is_leaf_agent, {
+            maxRetries: API_MAX_RETRIES,
+            timeout: API_TIMEOUT_MS,
+        });
         const llmCallEnd = now();
         messages.push(message);
 
@@ -286,7 +293,7 @@ if (import.meta.main) {
     } catch (err) {
         fatalError = err instanceof Error ? err.message : String(err);
         console.error(chalk.red(`\nFatal error: ${fatalError}`));
-        throw err;
+        // Removed throw err - error is already handled
     } finally {
         // Flush logs before exit
         await Logger.flush();
@@ -314,5 +321,10 @@ if (import.meta.main) {
                 ...(fatalError ? { error: fatalError } : {}),
             }));
         }
+
+        // Explicit exit: Deno can keep the event loop alive due to unclosed
+        // async resources (OpenAI client, Pyodide workers). Always exit so
+        // the process never hangs.
+        Deno.exit(fatalError ? 1 : 0);
     }
 }

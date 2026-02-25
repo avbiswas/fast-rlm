@@ -4,3 +4,6 @@ truncate_len: 2000
 primary_agent: "z-ai/glm-5"
 sub_agent: "minimax/minimax-m2.5"
 max_money_spent: 1.0
+# API retry / timeout
+api_max_retries: 3
+api_timeout_ms: 30000

@@ -1,5 +1,14 @@
 import { OpenAI } from "openai";
+import chalk from "npm:chalk@5";
 import { SYSTEM_PROMPT, LEAF_AGENT_SYSTEM_PROMPT } from "./prompt.ts";
+
+const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_TIMEOUT_MS = 30000;
+
+export interface ApiRetryOptions {
+    maxRetries?: number;
+    timeout?: number;
+}
 
 export interface Usage {
     prompt_tokens: number;
@@ -30,54 +39,62 @@ if (!apiKey) {
 export async function generate_code(
     messages: any[],
     model_name: string,
-    is_leaf_agent: boolean = false
+    is_leaf_agent: boolean = false,
+    options?: ApiRetryOptions
 ): Promise<CodeReturn> {
+    const maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
+    const timeout = options?.timeout ?? DEFAULT_TIMEOUT_MS;
+
     const client = new OpenAI({
         apiKey,
         baseURL,
+        maxRetries,
+        timeout,
     });
 
-    const completion = await client.chat.completions.create({
-        // model: "openai/gpt-5.2-codex",
-        // model: "z-ai/glm-5",
-        // model: "minimax/minimax-m2.5",
-        model: model_name,
-        messages: [
-            { role: "system", content: is_leaf_agent ? LEAF_AGENT_SYSTEM_PROMPT : SYSTEM_PROMPT },
-            ...messages
-        ],
-        // reasoning: { 'effort': 'low' },
-        // temperature: 0.1, // Low temperature for code generation
-    });
+    try {
+        const completion = await client.chat.completions.create({
+            model: model_name,
+            messages: [
+                { role: "system", content: is_leaf_agent ? LEAF_AGENT_SYSTEM_PROMPT : SYSTEM_PROMPT },
+                ...messages
+            ],
+        });
 
-    const content = completion.choices[0].message.content || "";
+        const content = completion.choices[0].message.content || "";
 
-    const replMatches = [...content.matchAll(/```repl([\s\S]*?)```/g)];
-    let code = replMatches.map(m => m[1].trim()).join("\n");
+        const replMatches = [...content.matchAll(/```repl([\s\S]*?)```/g)];
+        let code = replMatches.map(m => m[1].trim()).join("\n");
 
-    const usage = {
-        prompt_tokens: completion.usage.prompt_tokens,
-        completion_tokens: completion.usage.completion_tokens,
-        total_tokens: completion.usage.total_tokens,
-        cached_tokens: completion.usage?.prompt_tokens_details?.cached_tokens,
-        reasoning_tokens: completion.usage?.completion_tokens_details?.reasoning_tokens,
-        cost: completion.usage.cost ?? undefined,
-    }
-    if (!code) {
-        return {
-            code: "",
-            success: false,
-            message: completion.choices[0].message,
-            usage: usage
+        const usage: Usage = {
+            prompt_tokens: completion.usage?.prompt_tokens ?? 0,
+            completion_tokens: completion.usage?.completion_tokens ?? 0,
+            total_tokens: completion.usage?.total_tokens ?? 0,
+            cached_tokens: completion.usage?.prompt_tokens_details?.cached_tokens ?? 0,
+            reasoning_tokens: completion.usage?.completion_tokens_details?.reasoning_tokens ?? 0,
+            cost: (completion.usage as any)?.cost ?? undefined,
         };
-    }
 
-    return {
-        code: code,
-        success: true,
-        message: completion.choices[0].message,
-        usage: usage
-    };
+        if (!code) {
+            return {
+                code: "",
+                success: false,
+                message: completion.choices[0].message,
+                usage,
+            };
+        }
+
+        return {
+            code,
+            success: true,
+            message: completion.choices[0].message,
+            usage,
+        };
+    } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error(chalk.red(`✖ API call failed: ${msg}`));
+        throw error;
+    }
 }
 
 if (import.meta.main) {
