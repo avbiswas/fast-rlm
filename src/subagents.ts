@@ -106,14 +106,17 @@ export async function subagent(
     const setup_code = `
 context = ${JSON.stringify(context)}
 __final_result__ = None
+__final_result_set__ = False
 
 def FINAL(x):
-    global __final_result__
+    global __final_result__, __final_result_set__
     __final_result__ = x
+    __final_result_set__ = True
 
 def FINAL_VAR(x):
-    global __final_result__
+    global __final_result__, __final_result_set__
     __final_result__ = x
+    __final_result_set__ = True
 `;
     await pyodide.runPythonAsync(setup_code);
 
@@ -227,10 +230,10 @@ Output:\n${stdoutBuffer.trim()}
             execution_end: execEnd,
         };
 
-        const finalResult = pyodide.globals.get("__final_result__");
-        if (finalResult !== undefined) {
+        const finalResultSet = pyodide.globals.get("__final_result_set__");
+        if (finalResultSet) {
             logger.logStep({ step: i + 1, code, reasoning: message.reasoning, usage, timestamps: stepTimestamps });
-            let result = finalResult;
+            let result = pyodide.globals.get("__final_result__");
             if (result && typeof result.toJs === 'function') {
                 result = result.toJs();
             }
