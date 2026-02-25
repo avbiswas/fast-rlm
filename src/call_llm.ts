@@ -3,7 +3,7 @@ import chalk from "npm:chalk@5";
 import { SYSTEM_PROMPT, LEAF_AGENT_SYSTEM_PROMPT } from "./prompt.ts";
 
 const DEFAULT_MAX_RETRIES = 3;
-const DEFAULT_TIMEOUT_MS = 30000;
+const DEFAULT_TIMEOUT_MS = 600000;
 
 export interface ApiRetryOptions {
     maxRetries?: number;
@@ -48,8 +48,8 @@ export async function generate_code(
     const client = new OpenAI({
         apiKey,
         baseURL,
-        maxRetries,
-        timeout,
+        maxRetries: maxRetries,
+        timeout: timeout,
     });
 
     try {

@@ -22,6 +22,8 @@ class RLMConfig:
     max_money_spent: float = 1.0
     max_completion_tokens: int = 50000
     max_prompt_tokens: int = 200000
+    api_max_retries: int = 3
+    api_timeout_ms: int = 600000
 
     @classmethod
     def default(cls) -> "RLMConfig":

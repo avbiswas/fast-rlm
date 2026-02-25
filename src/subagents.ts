@@ -42,7 +42,7 @@ const MAX_MONEY_SPENT = _config.max_money_spent ?? Infinity;
 const MAX_COMPLETION_TOKENS = _config.max_completion_tokens ?? 50000;
 const MAX_PROMPT_TOKENS = _config.max_prompt_tokens ?? 200000;
 const API_MAX_RETRIES = _config.api_max_retries ?? 3;
-const API_TIMEOUT_MS = _config.api_timeout_ms ?? 30000;
+const API_TIMEOUT_MS = _config.api_timeout_ms ?? 600000;
 
 function truncateText(text: string): string {
     let truncatedOutput = "";
