@@ -110,11 +110,6 @@ def FINAL(x):
     global __final_result__, __final_result_set__
     __final_result__ = x
     __final_result_set__ = True
-
-def FINAL_VAR(x):
-    global __final_result__, __final_result_set__
-    __final_result__ = x
-    __final_result_set__ = True
 `;
     await pyodide.runPythonAsync(setup_code);
 
