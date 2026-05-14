@@ -126,9 +126,9 @@ function shortId(id: string): string {
   return parts.length > 1 ? parts[1]!.slice(0, 6) : id.slice(0, 6);
 }
 
-function formatCost(cost: number): string {
-  return `$${cost.toFixed(4)}`;
-}
+const formatCost = (cost: number) => {
+  return (cost ?? 0).toFixed(4); 
+};
 
 function formatTokens(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
