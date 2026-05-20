@@ -23,6 +23,12 @@ If you find this helpful, consider supporting on Patreon — it hosts all code, 
 
 ---
 
+## Demo
+
+<video src="/Users/avishekbiswas/Projects/neuralavb-site/public/media/projects/RLM-demo.mp4" controls width="100%"></video>
+
+---
+
 ## Install
 
 ```bash
