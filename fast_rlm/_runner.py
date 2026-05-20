@@ -80,7 +80,7 @@ def _deno_prefix_cmd() -> list[str]:
 
 
 def run(
-    query: str,
+    query: "str | dict",
     prefix: Optional[str] = None,
     config: Optional[RLMConfig | dict] = None,
     verbose: bool = True,
@@ -88,7 +88,9 @@ def run(
     """Run a fast-rlm query.
 
     Args:
-        query: The question / context to process.
+        query: The question / context to process. Either a string or a JSON-
+            serializable dict — when a dict, the agent receives `context` as a
+            real Python dict and the initial probe prints its top-level schema.
         prefix: Optional log filename prefix.
         config: RLMConfig object or dict of overrides (e.g. primary_agent, max_depth).
         verbose: If True, stream deno stdout/stderr to terminal.
@@ -114,10 +116,17 @@ def run(
         log_dir,
         "--output",
         output_file,
+        "--input-json",
     ]
 
     if prefix:
         cmd += ["--prefix", prefix]
+
+    if not isinstance(query, (str, dict)):
+        raise TypeError(
+            f"query must be a str or dict, got {type(query).__name__}"
+        )
+    stdin_payload = json.dumps(query)
 
     # RLMConfig merge: load defaults, overlay user overrides, write to temp file
     config_tmpfile = None
@@ -140,7 +149,7 @@ def run(
     try:
         result = subprocess.run(
             cmd,
-            input=query,
+            input=stdin_payload,
             text=True,
             encoding="utf-8",
             errors="replace",

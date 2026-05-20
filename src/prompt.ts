@@ -9,7 +9,14 @@ The REPL environment is initialized with:
 
 1. A \`context\` variable that contains extremely important information about your query. You should check the content of the \`context\` variable to understand what you are working with. Make sure you look through it sufficiently as you answer your query.
 
+   \`context\` may be either a Python **string** OR a Python **dict** (with arbitrary nested values). The initial probe shown to you reflects this:
+   - If \`context\` is a string, you will see its length and first/last 500 characters.
+   - If \`context\` is a dict, you will see its top-level keys and a short truncated preview of each value (no recursion into nested structures).
+   When \`context\` is a dict, prefer indexing directly (e.g. \`context["episodes"]\`) instead of stringifying it. Inspect individual values with \`print\`, slice them, or pass them into \`llm_query\` as needed.
+
 2. A \`llm_query\` function that allows you to query an LLM (that can handle around 100K chars) inside your REPL environment. This function is asynchronous, so you must use \`await llm_query(...)\`. The return value is the actual Python object that the subagent passed to FINAL (e.g. a list, dict, string, etc.).
+
+   \`llm_query\` accepts either a **string** OR a **dict** as its context argument — the child subagent will see the same flat-schema probe described above. When you have structured data to hand off, pass it as a dict (e.g. \`await llm_query({"task": "...", "items": chunk})\`) rather than re-stringifying it; this saves the child from re-parsing.
 
 Do NOT wrap the result in eval() or json.loads(); use it directly. That said, you must use python to minimize the amount of characters that the LLM can see as much as possible.
 
@@ -173,6 +180,11 @@ This metadata will include the context type, total characters, etc.
 The REPL environment is initialized with:
 
 1. A \`context\` variable that contains extremely important information about your query. You should check the content of the \`context\` variable to understand what you are working with. Make sure you look through it sufficiently as you answer your query.
+
+   \`context\` may be either a Python **string** OR a Python **dict**. The initial probe reflects this:
+   - If \`context\` is a string, you will see its length and first/last 500 characters.
+   - If \`context\` is a dict, you will see its top-level keys and a short truncated preview of each value (flat — no recursion).
+   When \`context\` is a dict, index it directly (e.g. \`context["foo"]\`) instead of stringifying it.
 
 2. A global function FINAL which you can use to return your answer as a string or a python variable of any native data type (Use dict, list, primitives etc)
 

@@ -64,8 +64,10 @@ function now(): string {
     return new Date().toISOString();
 }
 
+type Context = string | Record<string, unknown> | unknown[];
+
 export async function subagent(
-    context: string,
+    context: Context,
     subagent_depth = 0,
     parent_run_id?: string
 ) {
@@ -84,25 +86,40 @@ export async function subagent(
     });
     console.log("✔ Python Ready");
 
-    const llm_query = async (context: string) => {
+    const llm_query = async (context: unknown) => {
         if (subagent_depth >= MAX_DEPTH) {
             stdoutBuffer += "\nError: MAXIMUM DEPTH REACHED. You must solve this task on your own without calling llm_query.\n";
             throw new Error("MAXIMUM DEPTH REACHED. You must solve this task on your own without calling llm_query.");
         }
-        // if (context.length < 1000) {
-        //     stdoutBuffer += `\nError: Context passed to llm_query is too short (${context.length} chars). This likely means you forgot to attach the actual context/data. Make sure you include the relevant context when calling llm_query().\n`;
-        //     throw new Error(`Context too short (${context.length} chars). Ensure you have attached the context to llm_query().`);
-        // }
+        // If Python passes a dict/list it arrives as a PyProxy; convert to a
+        // plain JS value before recursing so the child agent gets native types.
+        let plain: Context;
+        if (context && typeof (context as { toJs?: unknown }).toJs === "function") {
+            plain = (context as { toJs: (opts: unknown) => Context }).toJs({
+                dict_converter: Object.fromEntries,
+            });
+        } else {
+            plain = context as Context;
+        }
+        if (typeof plain !== "string" && (typeof plain !== "object" || plain === null)) {
+            throw new Error(
+                `llm_query expects a string or dict/list context, got ${typeof plain}`
+            );
+        }
         console.log("↳ llm_query called");
-        const output = await subagent(context, subagent_depth + 1, logger.run_id);
+        const output = await subagent(plain, subagent_depth + 1, logger.run_id);
         return output;
     };
     pyodide.globals.set("llm_query", llm_query);
 
-    // Initialize context
-    // We use JSON.stringify to safely embed the string into Python code
+    // Initialize context. Strings are embedded as Python string literals;
+    // dicts/lists are passed through json.loads so the agent gets a real
+    // Python dict/list (not a JsProxy).
+    const contextLiteral = typeof context === "string"
+        ? JSON.stringify(context)
+        : `__import__('json').loads(${JSON.stringify(JSON.stringify(context))})`;
     const setup_code = `
-context = ${JSON.stringify(context)}
+context = ${contextLiteral}
 __final_result__ = None
 __final_result_set__ = False
 
@@ -114,15 +131,29 @@ def FINAL(x):
     await pyodide.runPythonAsync(setup_code);
 
     const initial_code = `
-print("Context type: ", type(context))
-print(f"Context length: {len(context) if hasattr(context, '__len__') else 'N/A'}")
-
-if len(context) > 500:
-    print(f"First 500 characters of str(context): ", str(context)[:500])
+if isinstance(context, dict):
+    print(f"Context type: dict")
+    print(f"Keys ({len(context)}): {list(context.keys())}")
     print("---")
-    print(f"Last 500 characters of str(context): ", str(context)[-500:])
+    for _k, _v in context.items():
+        _type_name = type(_v).__name__
+        try:
+            _len_info = f", len={len(_v)}"
+        except TypeError:
+            _len_info = ""
+        _preview = str(_v)
+        if len(_preview) > 200:
+            _preview = _preview[:200] + "...[truncated]"
+        print(f"  [{_k!r}] ({_type_name}{_len_info}): {_preview}")
 else:
-    print(f"Context: ", context)
+    print("Context type: ", type(context))
+    print(f"Context length: {len(context) if hasattr(context, '__len__') else 'N/A'}")
+    if len(context) > 500:
+        print(f"First 500 characters of str(context): ", str(context)[:500])
+        print("---")
+        print(f"Last 500 characters of str(context): ", str(context)[-500:])
+    else:
+        print(f"Context: ", context)
 `
     stdoutBuffer = "";
     const step0ExecStart = now();
@@ -278,7 +309,20 @@ if (import.meta.main) {
     let out: unknown;
     let fatalError: string | null = null;
     try {
-        const query_context = await new Response(Deno.stdin.readable).text();
+        const raw_stdin = await new Response(Deno.stdin.readable).text();
+        const inputIsJson = Deno.args.includes("--input-json");
+        let query_context: Context;
+        if (inputIsJson) {
+            const parsed = JSON.parse(raw_stdin);
+            if (typeof parsed !== "string" && (typeof parsed !== "object" || parsed === null)) {
+                throw new Error(
+                    `--input-json payload must decode to a string or dict/list, got ${typeof parsed}`
+                );
+            }
+            query_context = parsed as Context;
+        } else {
+            query_context = raw_stdin;
+        }
         out = await subagent(query_context);
 
         // Final result is already logged inside subagent()
