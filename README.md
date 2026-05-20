@@ -136,6 +136,66 @@ fruits = await llm_query("Generate 25 fruit names.", schema)
 
 The child subagent enforces the schema the same way. See [`examples/structured_io.py`](examples/structured_io.py) and [`examples/parallel_r_count.py`](examples/parallel_r_count.py) for end-to-end demos.
 
+## Tools
+
+Inside the REPL the agent has two built-in tools and may also receive user-defined tools as ordinary Python functions. There is no separate tool-calling API — tools are just callables in the REPL namespace.
+
+Pass Python functions to `fast_rlm.run(..., tools=[my_fn])` and they will be pre-loaded into the root agent's REPL. The RLM is shown the function name, input names, and docstring as description. They are not shown the full internal code of the tool (although they can choose to inspect it if the task requires them to). The agent calls them like any normal function inside the REPL.
+
+```python
+def filter_short(items: list[str], max_len: int = 20) -> list[str]:
+    """Return only items shorter than max_len."""
+    return [x for x in items if len(x) < max_len]
+
+result = fast_rlm.run("Pick the short titles from the list.", tools=[filter_short])
+```
+
+Two rules apply to any tool that may be handed to a sub-agent:
+
+- **Sub-agents do NOT inherit tools automatically.** To give a child a tool, the main agent must pass it explicitly in the REPL: `await llm_query("...", tools=[filter_short])`.
+- **Tools must be self-contained.** Do imports *inside* the function body and don't close over REPL-level variables - the child runs in a fresh REPL where outer state does not exist.
+
+The agent can also `def` new functions inside the REPL at any time and pass them down the same way.
+
+Currently all tools are expected to be Python functions. These functions are available inside the REPL. They are NOT available when the LLM produces code or generates reasoning steps.
+
+## Passing environment variables inside the REPL
+
+Tools often need credentials or configuration (API keys, base URLs, account IDs). Pass them through the `env_variables` kwarg on `fast_rlm.run(...)`:
+
+
+```python
+import os
+import fast_rlm
+
+def search_web(query: str, top_k: int = 5) -> list[dict]:
+    """Search the web via Tavily and return the top results."""
+    import os, urllib.request, json
+    req = urllib.request.Request(
+        "https://api.tavily.com/search",
+        data=json.dumps({"query": query, "max_results": top_k}).encode(),
+        headers={
+            "Authorization": f"Bearer {os.environ['TAVILY_API_KEY']}",
+            "Content-Type": "application/json",
+        },
+    )
+    return json.loads(urllib.request.urlopen(req).read())["results"]
+
+result = fast_rlm.run(
+    "Find three recent papers on recursive language models.",
+    tools=[search_web],
+    env_variables={"TAVILY_API_KEY": os.environ["TAVILY_API_KEY"]},
+)
+```
+
+Behavior:
+
+- `env_variables` must be a `dict[str, str]`.
+- Each entry is injected into `os.environ` inside **every** Pyodide REPL spawned by the run — the root agent and all sub-agents.
+- They are **not** set on the host Deno process and never appear in prompts, logs, or model context. The model only ever sees a tool's signature + docstring, so the key stays hidden as long as your tool doesn't print or return it.
+- Tools read them with the normal `os.environ["..."]` (do the `import os` inside the tool body — see the self-containment rule above).
+
+
 ## Configuration
 
 ```python
