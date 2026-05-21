@@ -34,8 +34,16 @@ def filter_short(items, n=20):
     """Keep items shorter than n characters."""
     return [x for x in items if len(x) < n]
 
-result = await llm_query("Pick the best short titles from these items.", tools=[filter_short, search])
+result = await llm_query("Pick the best short titles from these items.", schema=None, tools=[filter_short, search])
 \`\`\`
+
+Here is another example about websearch tools. Remember if your subagent needs to websearch, you need to explicitly pass the websearch tool to the subagent.
+
+\`\`\`repl
+result = await llm_query("Websearch this query: {query}", schema=None, tools=[search])
+\`\`\`
+
+If you do not pass the tool to your subagent, it will not be able to use it.
 
 Important rules about tools:
 - Sub-agents do NOT automatically inherit your tools. If you want a child to have a tool, you MUST pass it explicitly via \`tools=[...]\`. This applies both to tools pre-loaded into your REPL and to tools you define yourself.
@@ -54,8 +62,19 @@ You can require a subagent's FINAL value to conform to a JSON Schema by passing 
 
 \`\`\`repl
 schema = {"type": "array", "items": {"type": "string"}}
-names = await llm_query("Return a JSON list of fruit names.", schema)
+names = await llm_query("Return a JSON list of fruit names.", schema=schema, tools=[])
 \`\`\`
+
+** Input schema **
+You can pass input to llm_query as a string or a dictionary.
+When passing large context, it is better to pass it as a dictionary.
+
+\`\`\`repl
+schema = {"type": "array", "items": {"type": "string"}}
+input = {"task": "...", "context": "...", "buffers": "...", "query": "..."}
+result = await llm_query(input, schema=schema, tools=[search])
+\`\`\`
+
 
 The subagent will see the schema in its initial probe and its own FINAL call will be validated the same way. Passing schemas to subagents is strongly preferred when you expect a structured return value — it removes parsing on your side and forces the child to produce the exact shape you need.
 
@@ -86,25 +105,15 @@ You can write comments, but it is not needed, since a user won't read them. So s
 
 ** IMPORTANT NOTE **
 This is a multi-turn environment. You do not need to return your answer using FINAL in the first attempt. Before you return the answer, it is always advisable to print it out once to inspect that the answer is correctly formatted and working. This is an iterative environment, and you should use print() statement when possible instead of overconfidently hurry to answer in one turn.
-
 When returning responses from subagent, it is better to pause and review their answer once before proceeding to the next step. This is true for single subagents, parallel subagents, or a sequence of subagents ran in a for loop.
-
 Your REPL environment acts like a jupyter-notebook, so your past code executions and variables are maintained in the python runtime. This means YOU MUST NOT NEED to rewrite old code. Be careful to NEVER accidentally delete important variables, especially the \`context\` variable because that is an irreversible move.
-
 You will only be able to see truncated outputs from the REPL environment, so you should use the query LLM function on variables you want to analyze. You will find this function especially useful when you have to analyze the semantics of the context. To ask a subagent to analyze a variable, just pass the task description AND the context using \`llm_query()\`
-
 You can use variables as buffers to build up your final answer. Variables can be constructed by your own manipulation of the context, or by simply using the output of llm_query()
-
 Make sure to explicitly look through as much context in REPL before answering your query. An example strategy is to first look at the context and figure out a chunking strategy, then break up the context into smart chunks, and query an LLM per chunk with a particular question and save the answers to a buffer, then query an LLM with all the buffers to produce your final answer.
-
 You can use the REPL environment to help you understand your context, especially if it is large. Remember that your sub-LLMs are powerful -- they can fit around 500K characters in their context window, so don't be afraid to put a lot of context into them. For example, a viable strategy is to feed 10 documents per sub-LLM query. Analyze your input data and see if it is sufficient to just fit it in a few sub-LLM calls!
-
 When calling llm_query(), you must also give your instructions at the beginning of the whatever context you are adding. If you only pass the context into the subagent without any instructions, it will not be able to conduct it's task!
-
 Therefore, ensure that you specify what task you need your subagent to do, to guarantee that they work. 
-
 Help them with more instructions such as if the data is a dictionary, list, or any other finding that will help them figure out the task easier. Clarity is important!
-
 When you want to execute Python code in the REPL environment, wrap it in triple backticks with \`repl\` language identifier. For example, say we want our recursive model to search for the magic number in the context (assuming the context is a string), and the context is very long, so we want to chunk it:
 
 *** SLOWNESS ***
@@ -112,10 +121,24 @@ When you want to execute Python code in the REPL environment, wrap it in triple 
 - Subagents that are parallel tend to finish 10x faster
 - The value of your intelligence and thinking capability is how you design your method so that you maximize subagent parallelization (with asyncio.gather(*tasks))
 
+** Printing **
+
+Print outputs to read into your context. Printing will display the output in the REPL environment. There is no other way to access variable state.
+\`\`\`repl
+chunk = context[: 10000]
+print(chunk)
+\`\`\`
+
+Note: Just typing name of variable will not print it to the REPL environment!
+\`\`\`repl
+chunk = context[: 10000]
+chunk # THIS WILL NOT DISPLAY THE OUTPUT IN THE REPL ENVIRONMENT, YOU WILL JUST GET A "EMPTY OUTPUT" ERROR
+\`\`\`
+
 
 \`\`\`repl
 chunk = context[: 10000]
-answer = await llm_query(f"What is the magic number in the context? Here is the chunk: {chunk}")
+answer = await llm_query({"task": "What is the magic number in the context?", "context": chunk}, schema=None, tools=[])
 print(answer)
 \`\`\`
 
@@ -125,10 +148,10 @@ As an example, suppose you're trying to answer a question about a book. You can 
 query = "In Harry Potter and the Sorcerer's Stone, did Gryffindor win the House Cup because they led?"
 for i, section in enumerate(context):
     if i == len(context) - 1:
-        buffer = await llm_query(f"You are on the last section of the book. So far you know that: {buffers}. Gather from this last section to answer {query}. Here is the section: {section}")
+        buffer = await llm_query({"task": "You are on the last section of the book. Section is provided to you in this dictionary. So far you know the buffers presentend to you in buffers key. Gather from this last section to answer the query: {query}", "context": section, "buffers": buffers, "query": query}, schema=None, tools=[])
         print(f"Based on reading iteratively through the book, the answer is: {buffer}")
     else:
-        buffer = await llm_query(f"You are iteratively looking through a book, and are on section {i} of {len(context)}. Gather information to help answer {query}. Here is the section: {section}")
+        buffer = await llm_query({"task": "You are iteratively looking through a book, and are on section {i} of {len(context)}", "context": section, "query": query}, schema=None, tools=[])
         print(f"After section {i} of {len(context)}, you have tracked: {buffer}")
 \`\`\`
 
@@ -147,14 +170,14 @@ for i in range(10):
     else:
         chunk_str = "\\n".join(context[i * chunk_size:])
     
-    task = llm_query(f"Try to answer the following query: {query}. Here are the documents:\\n{chunk_str}. Only answer if you are confident in your answer based on the evidence.")
+    task = llm_query(f"Try to answer the following query: {query}. Here are the documents:\\n{chunk_str}. Only answer if you are confident in your answer based on the evidence.", schema=None, tools=[])
     tasks.append(task)
 
 answers = await asyncio.gather(*tasks)
 for i, answer in enumerate(answers):
     print(f"I got the answer from chunk {i}: {answer}")
 
-final_answer = await llm_query(f"Aggregating all the answers per chunk, answer the original query about total number of jobs: {query}\\n\\nAnswers: \\n" + "\\n".join(answers))
+final_answer = await llm_query({"task": "Aggregating all the answers per chunk, answer the original query about total number of jobs: {query}\\n\\nAnswers: \\n" + "\\n".join(answers)}, schema=None, tools=[])
 \`\`\`
 
 As a final example, after analyzing the context and realizing its separated by Markdown headers, we can maintain state through buffers by chunking the context by headers, and iteratively querying an LLM over it. Do note that this pattern is slow, so only do it if ABSOLUTELY necessary:
@@ -167,7 +190,7 @@ buffers = []
 for i in range(1, len(sections), 2):
     header = sections[i]
     info = sections[i + 1]
-    summary = await llm_query(f"Summarize this {header} section: {info}")
+    summary = await llm_query({"task": "Summarize this {header} section: {info}", "context": info}, schema=None, tools=[])
     buffers.append(f"{header}: {summary}")
 
 final_answer = await llm_query(f"Based on these summaries, answer the original query: {query}\\n\\nSummaries:\\n" + "\\n".join(buffers))

@@ -106,6 +106,19 @@ function now(): string {
     return new Date().toISOString();
 }
 
+// Banner prepended to step-output messages once the budget is past halfway.
+// Below 50% used we say nothing (don't burn tokens reminding a fresh agent).
+function budgetBanner(stepJustFinished: number, maxCalls: number): string {
+    const used = stepJustFinished + 1; // i is 0-indexed; +1 = steps consumed
+    if (used * 2 < maxCalls) return ""; // < 50% used → silent
+    const remaining = maxCalls - used;
+    return (
+        `[Steps remaining after this one: ${remaining} / ${maxCalls}]\n` +
+        `[You can call a subagent via llm_query(...) to finish smaller tasks if ` +
+        `needed. Use a divide-and-conquer strategy.]\n`
+    );
+}
+
 type Context = string | Record<string, unknown> | unknown[];
 type JsonSchema = Record<string, unknown>;
 
@@ -132,6 +145,20 @@ export async function subagent(
         },
     });
     console.log("✔ Python Ready");
+
+    // Make `requests` work inside the WASM REPL:
+    //   1. loadPackage("micropip") — bundled with Pyodide, no network needed.
+    //   2. micropip.install("requests", "pyodide-http") — pure-Python wheels.
+    //   3. pyodide_http.patch_all() — routes requests/urllib through host fetch.
+    // After this, any tool can `import requests; requests.get(...)` as normal.
+    const envSetupStart = Date.now();
+    await pyodide.loadPackage("micropip");
+    await pyodide.runPythonAsync(`
+import micropip
+await micropip.install(["requests", "httpx"])
+`);
+    const envSetupMs = Date.now() - envSetupStart;
+    console.log(`✔ requests + httpx ready (env setup took ${envSetupMs}ms)`);
 
     const pyProxyToJs = (val: unknown): unknown => {
         if (val && typeof (val as { toJs?: unknown }).toJs === "function") {
@@ -214,12 +241,62 @@ def FINAL(x):
 
 __tools__ = []
 
+# Pretty-print Pydantic models, JsProxy objects, and nested dicts/lists as
+# JSON. Plain strings/numbers/etc. fall through to the original print.
+import builtins as __builtins__
+__real_print__ = __builtins__.print
+
+def __coerce_for_print__(o, _seen=None):
+    if _seen is None:
+        _seen = set()
+    _oid = id(o)
+    if _oid in _seen:
+        return o
+    try:
+        from pydantic import BaseModel as __BaseModel
+        if isinstance(o, __BaseModel):
+            return o.model_dump(mode="json")
+    except ImportError:
+        pass
+    if hasattr(o, "to_py") and not isinstance(o, (str, bytes)):
+        try:
+            o = o.to_py()
+        except Exception:
+            return o
+    if isinstance(o, dict):
+        _seen.add(_oid)
+        return {k: __coerce_for_print__(v, _seen) for k, v in o.items()}
+    if isinstance(o, (list, tuple, set)):
+        _seen.add(_oid)
+        return [__coerce_for_print__(x, _seen) for x in o]
+    return o
+
+def print(*args, **kwargs):
+    import json as __json
+    _out = []
+    for _a in args:
+        _c = __coerce_for_print__(_a)
+        if _c is _a or isinstance(_a, (str, bytes, int, float, bool)) or _a is None:
+            _out.append(_a)
+            continue
+        try:
+            _out.append(__json.dumps(_c, indent=2, default=str, ensure_ascii=False))
+        except Exception:
+            _out.append(_a)
+    __real_print__(*_out, **kwargs)
+
+__builtins__.print = print
+
 def __register_tool__(src):
     _ns = {}
     exec(src, globals(), _ns)
     _fn = next((v for v in _ns.values() if callable(v)), None)
     if _fn is None:
         raise ValueError("Tool source defined no callable: " + src[:200])
+    try:
+        _fn.__fast_rlm_source__ = src
+    except (AttributeError, TypeError):
+        pass
     globals()[_fn.__name__] = _fn
     __tools__.append(_fn)
 
@@ -236,8 +313,17 @@ async def llm_query(context, schema=None, *, tools=None):
     _tool_sources = None
     if tools:
         import inspect as _inspect
-        _tool_sources = [_inspect.getsource(_t) for _t in tools]
-    return await __js_llm_query__(context, schema, _tool_sources)
+        _tool_sources = []
+        for _t in tools:
+            _stashed = getattr(_t, "__fast_rlm_source__", None)
+            if _stashed is not None:
+                _tool_sources.append(_stashed)
+            else:
+                _tool_sources.append(_inspect.getsource(_t))
+    _result = await __js_llm_query__(context, schema, _tool_sources)
+    if hasattr(_result, "to_py"):
+        return _result.to_py()
+    return _result
 `;
     await pyodide.runPythonAsync(setup_code);
 
@@ -284,14 +370,21 @@ else:
 import inspect as _inspect
 if __tools__:
     print("---")
-    print(f"Available tools ({len(__tools__)}) — callable directly in this REPL:")
+    print(f"Available tools ({len(__tools__)}) — callable directly in this REPL.")
+    print("NOTE: tools marked [async] must be called with 'await' (e.g. inside")
+    print("      an 'async def' or via asyncio.run). Tools marked [sync] are")
+    print("      called directly with no await.")
+    print()
     for _t in __tools__:
         try:
             _sig = str(_inspect.signature(_t))
         except (TypeError, ValueError):
             _sig = "(...)"
         _doc = _inspect.getdoc(_t)
-        print(f"def {_t.__name__}{_sig}:")
+        _is_async = _inspect.iscoroutinefunction(_t)
+        _kw = "async def" if _is_async else "def"
+        _kind = "[async — needs await]" if _is_async else "[sync]"
+        print(f"{_kw} {_t.__name__}{_sig}:  {_kind}")
         if _doc:
             for _line in _doc.splitlines():
                 print(f"    {_line}")
@@ -370,7 +463,7 @@ Output:\n${stdoutBuffer.trim()}
 
             messages.push({
                 "role": "user",
-                "content": "Error: We could not extract code because you may not have used repl block!"
+                "content": `${budgetBanner(i, MAX_CALLS)}Error: We could not extract code because you may not have used repl block!`
 
             });
             continue
@@ -430,7 +523,7 @@ Output:\n${stdoutBuffer.trim()}
                 });
                 messages.push({
                     "role": "user",
-                    "content": `Output: \n${truncatedErr}`,
+                    "content": `${budgetBanner(i, MAX_CALLS)}Output: \n${truncatedErr}`,
                 });
                 continue;
             }
@@ -455,7 +548,7 @@ Output:\n${stdoutBuffer.trim()}
 
         messages.push({
             "role": "user",
-            "content": `Output: \n${truncatedText}`
+            "content": `${budgetBanner(i, MAX_CALLS)}Output: \n${truncatedText}`
         });
     }
 
