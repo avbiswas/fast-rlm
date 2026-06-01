@@ -16,6 +16,12 @@ interface ValidateFunction {
     errors?: AjvError[] | null;
 }
 import { generate_code, Usage } from "./call_llm.ts";
+// MCP is optional: only the *types* are imported statically (erased at compile,
+// so they pull in nothing at runtime). The implementation in ./mcp.ts — and its
+// heavy `@modelcontextprotocol/sdk` npm dependency — is loaded lazily via dynamic
+// import() below, only when the run actually configures MCP servers. Runs without
+// MCP never fetch or load the SDK.
+import type { McpHandle, McpServersConfig } from "./mcp.ts";
 import { Logger, setLogDir, setLogPrefix, getLogFile } from "./logging.ts";
 import { startSpinner, showGlobalUsage } from "./ui.ts";
 import { trackUsage, getTotalUsage, resetUsage } from "./usage.ts";
@@ -129,6 +135,10 @@ export async function subagent(
     outputSchema?: JsonSchema | null,
     toolSources?: string[] | null,
     envVars?: Record<string, string> | null,
+    mcp?: McpHandle | null,
+    // Which MCP servers this agent may see: null = all (root), [] = none
+    // (default for sub-agents), [names] = the subset the parent granted.
+    mcpAllowedServers?: string[] | null,
 ) {
     const validate = compileSchema(outputSchema ?? null);
     const logger = new Logger(subagent_depth, MAX_CALLS, parent_run_id);
@@ -173,6 +183,7 @@ await micropip.install(["requests", "httpx"])
         context: unknown,
         child_schema?: unknown,
         child_tool_sources?: unknown,
+        child_mcp_servers?: unknown,
     ) => {
         if (subagent_depth >= MAX_DEPTH) {
             stdoutBuffer += "\nError: MAXIMUM DEPTH REACHED. You must solve this task on your own without calling llm_query.\n";
@@ -205,6 +216,18 @@ await micropip.install(["requests", "httpx"])
             }
             childTools = t as string[];
         }
+        // Sub-agents inherit NO MCP servers unless the parent grants them by
+        // name (server-level). Default → [] (none).
+        let childMcpServers: string[] = [];
+        if (child_mcp_servers != null) {
+            const m = pyProxyToJs(child_mcp_servers);
+            if (!Array.isArray(m) || !m.every((x) => typeof x === "string")) {
+                throw new Error(
+                    `llm_query mcp must be a list of server-name strings, got ${typeof m}`
+                );
+            }
+            childMcpServers = m as string[];
+        }
         console.log("↳ llm_query called");
         const output = await subagent(
             plain,
@@ -213,10 +236,42 @@ await micropip.install(["requests", "httpx"])
             childSchema,
             childTools,
             envVars ?? null,
+            mcp ?? null,
+            childMcpServers,
         );
         return output;
     };
     pyodide.globals.set("__js_llm_query__", js_llm_query);
+
+    // ---- MCP bridge --------------------------------------------------------
+    // Which servers this agent may see: null → all (root), else the granted set.
+    const allowedServers = mcp
+        ? (mcpAllowedServers == null
+            ? mcp.serverNames
+            : mcpAllowedServers.filter((s) => mcp.serverNames.includes(s)))
+        : [];
+    const scopedTools = mcp ? mcp.tools.filter((t) => allowedServers.includes(t.server)) : [];
+    const scopedResources = mcp ? mcp.resources.filter((r) => allowedServers.includes(r.server)) : [];
+    const scopedTemplates = mcp ? mcp.resourceTemplates.filter((t) => allowedServers.includes(t.server)) : [];
+    const mcpData = {
+        // null means "all servers" (root agent); a list means an explicit grant.
+        allowedServers: mcp && mcpAllowedServers == null ? null : allowedServers,
+        tools: scopedTools.map((t) => ({ server: t.server, name: t.name, description: t.description })),
+        schemas: Object.fromEntries(scopedTools.map((t) => [`${t.server}.${t.name}`, t.inputSchema])),
+        resources: scopedResources,
+        resourceTemplates: scopedTemplates,
+    };
+    const mcpEnabled = mcp != null && (allowedServers.length > 0 || mcpData.allowedServers === null);
+
+    if (mcpEnabled) {
+        pyodide.globals.set("__js_mcp_call__", async (server: unknown, tool: unknown, args: unknown) => {
+            const a = (pyProxyToJs(args) ?? {}) as Record<string, unknown>;
+            return await mcp!.callTool(String(server), String(tool), a);
+        });
+        pyodide.globals.set("__js_mcp_read_resource__", async (server: unknown, uri: unknown) => {
+            return await mcp!.readResource(String(server), String(uri));
+        });
+    }
 
     // Initialize context. Strings are embedded as Python string literals;
     // dicts/lists are passed through json.loads so the agent gets a real
@@ -300,7 +355,7 @@ def __register_tool__(src):
     globals()[_fn.__name__] = _fn
     __tools__.append(_fn)
 
-async def llm_query(context, schema=None, *, tools=None):
+async def llm_query(context, schema=None, *, tools=None, mcp=None):
     """Recursively query a sub-agent.
 
     Args:
@@ -309,6 +364,9 @@ async def llm_query(context, schema=None, *, tools=None):
         tools: optional list of Python functions to expose in the sub-agent's REPL.
             By default the sub-agent does NOT inherit your tools; pass them
             explicitly here if you want the child to have access.
+        mcp: optional list of MCP server-name strings to grant the sub-agent.
+            By default the sub-agent inherits NO MCP servers; name the ones it
+            may use (e.g. mcp=["fsio"]) and it gets that server's tools/resources.
     """
     _tool_sources = None
     if tools:
@@ -320,7 +378,8 @@ async def llm_query(context, schema=None, *, tools=None):
                 _tool_sources.append(_stashed)
             else:
                 _tool_sources.append(_inspect.getsource(_t))
-    _result = await __js_llm_query__(context, schema, _tool_sources)
+    _mcp = list(mcp) if mcp else None
+    _result = await __js_llm_query__(context, schema, _tool_sources, _mcp)
     if hasattr(_result, "to_py"):
         return _result.to_py()
     return _result
@@ -336,6 +395,95 @@ async def llm_query(context, schema=None, *, tools=None):
         }
     }
 
+    // Inject MCP proxy functions (scoped to this agent's allowed servers).
+    if (mcpEnabled) {
+        await pyodide.runPythonAsync(`
+import json as _json
+__mcp_data__ = _json.loads(${JSON.stringify(JSON.stringify(mcpData))})
+__mcp_allowed_servers__ = __mcp_data__["allowedServers"]
+
+def _mcp_check(server):
+    if __mcp_allowed_servers__ is not None and server not in __mcp_allowed_servers__:
+        raise PermissionError(
+            f"MCP server {server!r} is not available to this agent. "
+            f"Available: {__mcp_allowed_servers__}"
+        )
+
+def mcp_list_tools(server=None):
+    """List available MCP tools (name + description). Optionally filter by server."""
+    return [
+        {"server": t["server"], "name": t["name"], "description": t["description"]}
+        for t in __mcp_data__["tools"]
+        if server is None or t["server"] == server
+    ]
+
+def mcp_tool_schema(name):
+    """Return the input JSON Schema for an MCP tool. Accepts 'server.tool' or 'tool' if unambiguous."""
+    _schemas = __mcp_data__["schemas"]
+    if name in _schemas:
+        return _schemas[name]
+    _m = [k for k in _schemas if k.split(".", 1)[-1] == name]
+    if len(_m) == 1:
+        return _schemas[_m[0]]
+    if len(_m) > 1:
+        raise ValueError(f"Ambiguous tool name {name!r}; use 'server.tool'. Matches: {_m}")
+    raise KeyError(f"No such MCP tool: {name!r}")
+
+async def mcp_call(server, tool, **kwargs):
+    """Call an MCP tool. Returns structuredContent (dict) if present, else the text result. Raises on tool error."""
+    _mcp_check(server)
+    _res = _json.loads(await __js_mcp_call__(server, tool, kwargs))
+    if _res.get("isError"):
+        _txt = " ".join(c.get("text", "") for c in _res.get("content", []) if isinstance(c, dict))
+        raise RuntimeError(f"MCP tool {server}.{tool} failed: {_txt}")
+    if _res.get("structuredContent") is not None:
+        return _res["structuredContent"]
+    _texts = [c.get("text", "") for c in _res.get("content", []) if isinstance(c, dict) and c.get("type") == "text"]
+    if len(_texts) == 1:
+        return _texts[0]
+    if _texts:
+        return "\\n".join(_texts)
+    return _res.get("content")
+
+def mcp_list_resources(server=None):
+    """List available MCP resources (uri + name + description). Optionally filter by server."""
+    return [r for r in __mcp_data__["resources"] if server is None or r["server"] == server]
+
+def mcp_list_resource_templates(server=None):
+    """List MCP resource templates: parameterized uris like 'transcripts://episode/{id}'.
+    Fill in the {placeholders} and read the concrete uri with mcp_read_resource(uri, server=...)."""
+    return [t for t in __mcp_data__["resourceTemplates"] if server is None or t["server"] == server]
+
+async def mcp_read_resource(uri, server=None):
+    """Read an MCP resource by uri. Pass server=... if the uri isn't in mcp_list_resources()."""
+    if server is None:
+        _cands = sorted({r["server"] for r in __mcp_data__["resources"] if r["uri"] == uri})
+        if len(_cands) == 1:
+            server = _cands[0]
+        elif __mcp_allowed_servers__ is not None and len(__mcp_allowed_servers__) == 1:
+            server = __mcp_allowed_servers__[0]
+        else:
+            raise ValueError(f"Cannot infer server for resource {uri!r}; pass server=...")
+    _mcp_check(server)
+    _res = _json.loads(await __js_mcp_read_resource__(server, uri))
+    _out = [c.get("text") if c.get("text") is not None else c
+            for c in _res.get("contents", []) if isinstance(c, dict)]
+    return _out[0] if len(_out) == 1 else _out
+`);
+    }
+
+    const mcpProbeCode = mcpEnabled
+        ? `print("---")
+_mcp_servers = sorted({s for s in __mcp_allowed_servers__} if __mcp_allowed_servers__ is not None else {t["server"] for t in __mcp_data__["tools"]} | {r["server"] for r in __mcp_data__["resources"]} | {t["server"] for t in __mcp_data__["resourceTemplates"]})
+print(f"MCP: {len(mcp_list_tools())} tool(s); {len(mcp_list_resources())} listed resource(s); {len(mcp_list_resource_templates())} resource template(s). Server(s): {_mcp_servers}")
+print("  Tools:     mcp_list_tools(server=None) -> names; mcp_tool_schema('server.tool') -> schema; await mcp_call('server','tool',**kwargs)")
+print("  Resources: mcp_list_resources(); await mcp_read_resource(uri, server=None)")
+if mcp_list_resource_templates():
+    print("  Resource templates (fill {placeholders}, then mcp_read_resource(uri, server=...)):")
+    for _t in mcp_list_resource_templates():
+        print(f"    [{_t['server']}] {_t['uriTemplate']}  -  {_t.get('description','')}")
+`
+        : "";
     const schemaPreambleCode = outputSchema
         ? `print("Required output schema for FINAL (JSON Schema):")
 print(${JSON.stringify(JSON.stringify(outputSchema, null, 2))})
@@ -392,7 +540,7 @@ if __tools__:
 else:
     print("---")
     print("Available tools: (none provided)")
-`
+${mcpProbeCode}`
     stdoutBuffer = "";
     const step0ExecStart = now();
     await pyodide.runPythonAsync(initial_code);
@@ -577,6 +725,7 @@ if (import.meta.main) {
 
     let out: unknown;
     let fatalError: string | null = null;
+    let mcpHandle: McpHandle | null = null;
     try {
         const raw_stdin = await new Response(Deno.stdin.readable).text();
         const inputIsJson = Deno.args.includes("--input-json");
@@ -625,7 +774,24 @@ if (import.meta.main) {
             rootEnv = parsedEnv as Record<string, string>;
         }
 
-        out = await subagent(query_context, 0, undefined, rootSchema, rootTools, rootEnv);
+        const mcpIdx = Deno.args.indexOf("--mcp-file");
+        if (mcpIdx !== -1 && Deno.args[mcpIdx + 1]) {
+            const mcpRaw = await Deno.readTextFile(Deno.args[mcpIdx + 1]);
+            const parsedMcp = JSON.parse(mcpRaw) as McpServersConfig;
+            if (typeof parsedMcp !== "object" || parsedMcp === null || Array.isArray(parsedMcp)) {
+                throw new Error("--mcp-file must decode to an object of server-name → config");
+            }
+            // Lazy import: pulls in @modelcontextprotocol/sdk only now, when MCP is used.
+            const { connectMcpServers } = await import("./mcp.ts");
+            mcpHandle = await connectMcpServers(parsedMcp);
+            console.log(
+                `✔ MCP connected: ${mcpHandle.tools.length} tool(s), ` +
+                `${mcpHandle.resources.length} resource(s) across [${mcpHandle.serverNames.join(", ")}]`
+            );
+        }
+
+        // Root agent: mcpAllowedServers = null → sees all configured servers.
+        out = await subagent(query_context, 0, undefined, rootSchema, rootTools, rootEnv, mcpHandle, null);
 
         // Final result is already logged inside subagent()
         // Show global usage across all runs
@@ -636,6 +802,11 @@ if (import.meta.main) {
         console.error(chalk.red(`\nFatal error: ${fatalError}`));
         // Removed throw err - error is already handled
     } finally {
+        // Close MCP connections (and any stdio subprocesses) before exit.
+        if (mcpHandle) {
+            try { await mcpHandle.closeAll(); } catch { /* ignore */ }
+        }
+
         // Flush logs before exit
         await Logger.flush();
 

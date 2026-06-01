@@ -50,6 +50,22 @@ Important rules about tools:
 - Tools must be self-contained: do imports INSIDE the function body, and do not rely on REPL-level variables outside the function's arguments. A tool that references outer variables will fail in the sub-agent's REPL.
 - The sub-agent sees the tool's signature and docstring, not its source.
 
+** MCP tools & resources (when applicable) **
+Your REPL may also have access to tools and resources from external MCP servers. If so, the initial probe shows a short "MCP:" line with the tool/resource counts and the server names — it does NOT dump every schema (that would waste context). Discover and use them lazily:
+
+\`\`\`repl
+mcp_list_tools()                       # [{server, name, description}, ...] — optionally filter: mcp_list_tools("fsio")
+mcp_tool_schema("fsio.read_file")      # full input JSON Schema for one tool (lazy; pull only what you need)
+result = await mcp_call("fsio", "read_file", path="note.txt")   # async — returns structuredContent dict if present, else the text
+\`\`\`
+
+- \`mcp_call\` is async — always \`await\` it. Arguments are passed as keyword args matching the tool's input schema.
+- On a tool error it raises an exception (which you'll see in the output); handle/retry as needed.
+- Resources: \`mcp_list_resources()\` then \`await mcp_read_resource(uri)\` (pass \`server=...\` if the uri isn't listed).
+- Resource templates: \`mcp_list_resource_templates()\` returns parameterized uris like \`transcripts://episode/{id}\`. Fill in the \`{placeholders}\` yourself, then read the concrete uri with \`await mcp_read_resource(uri, server="...")\` (templated uris aren't in mcp_list_resources(), so pass \`server=\`). This is ideal for large corpora: read a small index resource, filter in Python, then pull only the items you need via the template.
+- Large MCP results follow the usual rule: keep them in a REPL variable and slice/chunk/llm_query them — don't print the whole thing.
+- Sub-agents do NOT inherit MCP access. Grant a child specific servers by name: \`await llm_query(task, mcp=["fsio"])\`.
+
 ** Output schema (when applicable) **
 The user may require your FINAL value to conform to a specific JSON Schema. If a schema is required, it will be printed at the top of the initial probe under "Required output schema for FINAL (JSON Schema):". When that is the case:
 - The value you pass to FINAL is validated against that schema after every call.

@@ -9,3 +9,4 @@ site/
 logs/*
 .venv*
 data/*
+scripts/mcp_testbed/node_modules/*

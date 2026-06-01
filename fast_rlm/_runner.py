@@ -141,6 +141,7 @@ def run(
     output_schema: Optional[Any] = None,
     tools: Optional[list[Callable]] = None,
     env_variables: Optional[dict[str, str]] = None,
+    mcp_servers: Optional[dict[str, dict]] = None,
 ) -> dict:
     """Run a fast-rlm query.
 
@@ -156,6 +157,14 @@ def run(
             run (root and all sub-agents). They are NOT set on the Deno host
             process and never leak outside Pyodide. Useful for handing API
             keys / configuration to tools without exposing them to the model.
+        mcp_servers: Optional dict of MCP servers to connect for this run, keyed
+            by name. Each value is either a stdio config
+            ``{"command": str, "args": [str], "env": {str: str}}`` or an HTTP
+            config ``{"url": str, "headers": {str: str}}``. The root agent sees
+            all configured servers and can call their tools inside the REPL via
+            ``await mcp_call(server, tool, **kwargs)``. Sub-agents inherit none
+            by default — grant them per server via ``llm_query(..., mcp=[name])``.
+            Configuring any stdio server grants the Deno host ``--allow-run``.
         tools: Optional list of Python callables exposed to the root agent.
             Each function's source is extracted via `inspect.getsource` and
             executed inside the agent's Pyodide REPL before initialization.
@@ -230,6 +239,20 @@ def run(
             json.dump(schema_dict, f)
         cmd += ["--output-schema-file", schema_tmpfile]
 
+    mcp_tmpfile = None
+    if mcp_servers:
+        if not isinstance(mcp_servers, dict) or not all(
+            isinstance(k, str) and isinstance(v, dict) for k, v in mcp_servers.items()
+        ):
+            raise TypeError("mcp_servers must be a dict[str, dict]")
+        # stdio servers (no 'url') require Deno to spawn subprocesses.
+        if any("url" not in cfg for cfg in mcp_servers.values()):
+            cmd.insert(cmd.index("src/subagents.ts"), "--allow-run")
+        mcp_tmpfile = tempfile.mktemp(suffix=".mcp.json")
+        with open(mcp_tmpfile, "w") as f:
+            json.dump(mcp_servers, f)
+        cmd += ["--mcp-file", mcp_tmpfile]
+
     # RLMConfig merge: load defaults, overlay user overrides, write to temp file
     config_tmpfile = None
     if config is not None:
@@ -279,6 +302,8 @@ def run(
             os.unlink(tools_tmpfile)
         if env_tmpfile and os.path.exists(env_tmpfile):
             os.unlink(env_tmpfile)
+        if mcp_tmpfile and os.path.exists(mcp_tmpfile):
+            os.unlink(mcp_tmpfile)
 
     if "error" in data:
         raise RuntimeError(f"fast-rlm subagent failed: {data['error']}")

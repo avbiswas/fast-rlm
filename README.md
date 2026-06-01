@@ -202,6 +202,47 @@ Behavior:
 - Tools read them with the normal `os.environ["..."]` (do the `import os` inside the tool body — see the self-containment rule above).
 
 
+## MCP servers
+
+fast-rlm can connect to [Model Context Protocol](https://modelcontextprotocol.io) servers and expose their tools and resources inside the REPL. The agent calls them with `await mcp_call(server, tool, **kwargs)` and reads resources with `await mcp_read_resource(uri)` — just like any other REPL function.
+
+**Nothing extra to install for fast-rlm.** MCP support is optional and lazy: the MCP client lives in the Deno engine, and Deno auto-downloads it on first use. There is *no* `pip install fast-rlm[mcp]` — runs that don't use MCP never load it. You only install the **MCP servers** you actually want to connect to (each per its own docs).
+
+Pass servers to `run(..., mcp_servers={...})`, keyed by name. Transport is chosen by the config shape:
+
+```python
+import fast_rlm
+
+result = fast_rlm.run(
+    "Read /data/report.md and summarize it in three bullets.",
+    mcp_servers={
+        # stdio: fast-rlm SPAWNS the server (and kills it on exit) — you don't run it.
+        "fs":   {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"]},
+        # http: the server must already be running; you point at its URL.
+        "web":  {"url": "http://localhost:3333/mcp", "headers": {"Authorization": "Bearer ..."}},
+    },
+)
+```
+
+Install a server the usual way before pointing fast-rlm at it, e.g.:
+
+```bash
+# stdio servers are launched on demand via their command (npx/uvx/node/...)
+npx -y @modelcontextprotocol/server-filesystem /data    # Node-based
+uvx mcp-server-fetch                                     # Python-based
+```
+
+| Config key | Transport | Who runs the server? | Notes |
+|---|---|---|---|
+| `command` (+ `args`, `cwd`, `env`) | stdio | fast-rlm spawns it | grants Deno `--allow-run`; **a shell/filesystem server is full host access, not sandboxed** |
+| `url` (+ `headers`) | HTTP | you (must be listening) | |
+
+Inside the REPL the agent gets a small, lazy discovery API (the step-0 probe only shows counts, never full schemas):
+
+- `mcp_list_tools(server=None)` / `mcp_tool_schema("server.tool")` / `await mcp_call(server, tool, **kwargs)`
+- `mcp_list_resources()` / `mcp_list_resource_templates()` / `await mcp_read_resource(uri, server=None)`
+
+
 ## Configuration
 
 ```python
