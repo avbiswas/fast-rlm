@@ -156,6 +156,7 @@ def run(
     env_variables: Optional[dict[str, str]] = None,
     mcp_servers: Optional[dict[str, dict]] = None,
     llm_kwargs: Optional[dict] = None,
+    vertex: bool = False,
 ) -> dict:
     """Run a fast-rlm query.
 
@@ -213,6 +214,13 @@ def run(
         "--allow-net",
         "--allow-sys=hostname,osRelease",
         "--allow-write",
+    ]
+
+    # Vertex AI ADC via gcloud CLI needs subprocess permission
+    if vertex:
+        cmd.append("--allow-run")
+
+    cmd += [
         "src/subagents.ts",
         "--log-dir",
         log_dir,
@@ -300,6 +308,11 @@ def run(
             yaml.dump(merged, f)
         cmd += ["--config", config_tmpfile]
 
+    # Vertex AI: signal the Deno engine to use ADC auth
+    run_env = None
+    if vertex:
+        run_env = {**os.environ, "RLM_VERTEX_AI": "1"}
+
     try:
         result = subprocess.run(
             cmd,
@@ -308,6 +321,7 @@ def run(
             encoding="utf-8",
             errors="replace",
             cwd=str(engine_dir),
+            env=run_env,
             stdout=None if verbose else subprocess.PIPE,
             stderr=None if verbose else subprocess.PIPE,
         )

@@ -1,6 +1,7 @@
 import { OpenAI } from "openai";
 import chalk from "npm:chalk@5";
 import { buildSystemPrompt, PromptOptions } from "./prompt.ts";
+import { createVertexClient, refreshVertexClient, isVertexModel, stripVertexPrefix } from "./vertex.ts";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_TIMEOUT_MS = 600000;
@@ -29,12 +30,17 @@ interface CodeReturn {
 const apiKey = Deno.env.get("RLM_MODEL_API_KEY") || Deno.env.get("OPENROUTER_API_KEY");
 const baseURL = Deno.env.get("RLM_MODEL_BASE_URL") || "https://openrouter.ai/api/v1";
 
-if (!apiKey) {
+// Vertex AI uses ADC — no static API key needed. Only validate key for non-Vertex runs.
+const vertexMode = Deno.env.get("RLM_VERTEX_AI") === "1";
+if (!apiKey && !vertexMode) {
     throw new Error(
         "RLM_MODEL_API_KEY environment variable is missing or empty. " +
-        "Set it to your API key, e.g.: export RLM_MODEL_API_KEY='sk-...'"
+        "Set it to your API key, e.g.: export RLM_MODEL_API_KEY='sk-...'\n" +
+        "For Vertex AI, set RLM_VERTEX_AI=1 and GOOGLE_CLOUD_PROJECT instead."
     );
 }
+
+let vertexClient: OpenAI | null = null;
 
 export async function generate_code(
     messages: any[],
@@ -49,17 +55,30 @@ export async function generate_code(
     const maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
     const timeout = options?.timeout ?? DEFAULT_TIMEOUT_MS;
 
-    const client = new OpenAI({
-        apiKey,
-        baseURL,
-        maxRetries: maxRetries,
-        timeout: timeout,
-    });
+    let client: OpenAI;
+    let resolvedModel = model_name;
+
+    if (isVertexModel(model_name) || vertexMode) {
+        resolvedModel = isVertexModel(model_name) ? stripVertexPrefix(model_name) : model_name;
+        if (!vertexClient) {
+            vertexClient = await createVertexClient({ maxRetries, timeout });
+        } else {
+            vertexClient = await refreshVertexClient(vertexClient);
+        }
+        client = vertexClient;
+    } else {
+        client = new OpenAI({
+            apiKey,
+            baseURL,
+            maxRetries: maxRetries,
+            timeout: timeout,
+        });
+    }
 
     try {
         // deno-lint-ignore no-explicit-any
         const createParams: any = {
-            model: model_name,
+            model: resolvedModel,
             messages: [
                 { role: "system", content: buildSystemPrompt(is_leaf_agent, promptOpts ?? {}) },
                 ...messages
@@ -125,16 +144,32 @@ export async function confirmDelegation(
     promptOpts?: PromptOptions,
     llmKwargs?: Record<string, unknown> | null
 ): Promise<ConfirmResult> {
-    const client = new OpenAI({
-        apiKey,
-        baseURL,
-        maxRetries: options?.maxRetries ?? DEFAULT_MAX_RETRIES,
-        timeout: options?.timeout ?? DEFAULT_TIMEOUT_MS,
-    });
+    let client: OpenAI;
+    let resolvedModel = model_name;
+
+    if (isVertexModel(model_name) || vertexMode) {
+        resolvedModel = isVertexModel(model_name) ? stripVertexPrefix(model_name) : model_name;
+        if (!vertexClient) {
+            vertexClient = await createVertexClient({
+                maxRetries: options?.maxRetries ?? DEFAULT_MAX_RETRIES,
+                timeout: options?.timeout ?? DEFAULT_TIMEOUT_MS,
+            });
+        } else {
+            vertexClient = await refreshVertexClient(vertexClient);
+        }
+        client = vertexClient;
+    } else {
+        client = new OpenAI({
+            apiKey,
+            baseURL,
+            maxRetries: options?.maxRetries ?? DEFAULT_MAX_RETRIES,
+            timeout: options?.timeout ?? DEFAULT_TIMEOUT_MS,
+        });
+    }
 
     // deno-lint-ignore no-explicit-any
     const createParams: any = {
-        model: model_name,
+        model: resolvedModel,
         messages: [
             { role: "system", content: buildSystemPrompt(is_leaf_agent, promptOpts ?? {}) },
             ...baseMessages,
