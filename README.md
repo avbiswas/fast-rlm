@@ -55,8 +55,26 @@ export RLM_MODEL_API_KEY=sk-or-...
 |----------|-------------|---------|
 | `RLM_MODEL_API_KEY` | API key for your LLM provider | — |
 | `RLM_MODEL_BASE_URL` | OpenAI-compatible base URL | `https://openrouter.ai/api/v1` |
+| `GOOGLE_CLOUD_PROJECT` | GCP project ID (Vertex AI only) | — |
+| `GOOGLE_CLOUD_LOCATION` | GCP region (Vertex AI only) | `us-central1` |
 
 By default, fast-rlm uses [OpenRouter](https://openrouter.ai). You can point it at any OpenAI-compatible API by setting `RLM_MODEL_BASE_URL`.
+
+### Vertex AI (Google Gemini)
+
+Use Gemini models via Vertex AI with IAM-based auth (no API key needed):
+
+```python
+import fast_rlm
+
+config = fast_rlm.RLMConfig()
+config.primary_agent = "vertex/google/gemini-2.5-flash"
+config.sub_agent = "vertex/google/gemini-2.5-flash"
+
+result = fast_rlm.run("Count the r's in 50 fruits", config=config, vertex=True)
+```
+
+Auth uses Application Default Credentials. Either run `gcloud auth application-default login` or set `GOOGLE_APPLICATION_CREDENTIALS` to a service account key path.
 
 ---
 
