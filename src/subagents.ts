@@ -92,8 +92,19 @@ const _config = loadConfig();
 const MAX_CALLS = _config.max_calls_per_subagent ?? 20;
 const MAX_DEPTH = _config.max_depth ?? 3;
 const TRUNCATE_LEN = _config.truncate_len ?? 5000;
-const PRIMARY_AGENT = _config.primary_agent ?? "z-ai/glm-5";
-const SUB_AGENT = _config.sub_agent ?? "minimax/minimax-m2.5";
+// primary_agent is required (no default). sub_agent falls back to primary_agent.
+function requirePrimaryAgent(): string {
+    const p = _config.primary_agent;
+    if (!p) {
+        throw new Error(
+            "primary_agent is required and has no default — set it in the config " +
+            "(e.g. rlm_config.yaml or RLMConfig(primary_agent=...)).",
+        );
+    }
+    return p;
+}
+const PRIMARY_AGENT: string = requirePrimaryAgent();
+const SUB_AGENT: string = _config.sub_agent ?? PRIMARY_AGENT;
 const MAX_MONEY_SPENT = _config.max_money_spent ?? Infinity;
 const MAX_COMPLETION_TOKENS = _config.max_completion_tokens ?? 50000;
 const MAX_PROMPT_TOKENS = _config.max_prompt_tokens ?? 200000;

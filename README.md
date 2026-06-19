@@ -84,11 +84,17 @@ Auth uses Application Default Credentials. Either run `gcloud auth application-d
 
 ```python
 import fast_rlm
+from fast_rlm import RLMConfig
 
-result = fast_rlm.run("Generate 50 fruits and count number of r")
+# primary_agent is REQUIRED — there is no default model.
+config = RLMConfig(primary_agent="z-ai/glm-5")
+
+result = fast_rlm.run("Generate 50 fruits and count number of r", config=config)
 print(result["results"])
 print(result["usage"])
 ```
+
+> **`primary_agent` is required.** Every `run()` needs a config that sets it (e.g. `RLMConfig(primary_agent="...")`); `sub_agent` is optional and defaults to `primary_agent`. The shorter examples below omit `config=` for brevity — pass the `config` above to run them.
 
 ## Arbitrarily Long Context
 
@@ -318,8 +324,8 @@ All config fields:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `primary_agent` | `str` | `z-ai/glm-5` | Model for the root agent |
-| `sub_agent` | `str` | `minimax/minimax-m2.5` | Model for child subagents |
+| `primary_agent` | `str` | **(required)** | Model for the root agent. No default — must be set or `run()` raises. |
+| `sub_agent` | `str` | `primary_agent` | Model for child subagents. Defaults to `primary_agent` when unset. |
 | `max_depth` | `int` | `3` | Max recursive subagent depth |
 | `max_calls_per_subagent` | `int` | `20` | Max LLM calls per subagent |
 | `truncate_len` | `int` | `2000` | Output chars shown to the LLM per step |
@@ -399,7 +405,8 @@ Edit `rlm_config.yaml` at the project root:
 max_calls_per_subagent: 20
 max_depth: 3
 truncate_len: 2000
-primary_agent: "z-ai/glm-5"
+primary_agent: "z-ai/glm-5"   # REQUIRED — no default
+# sub_agent is optional; omit it to reuse primary_agent for subagents
 sub_agent: "minimax/minimax-m2.5"
 max_money_spent: 1.0
 max_completion_tokens: 50000

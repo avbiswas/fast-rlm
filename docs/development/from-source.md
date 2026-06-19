@@ -54,7 +54,8 @@ Edit `rlm_config.yaml` at the project root:
 max_calls_per_subagent: 20
 max_depth: 3
 truncate_len: 2000
-primary_agent: "z-ai/glm-5"
+primary_agent: "z-ai/glm-5"   # REQUIRED — no default
+# sub_agent is optional; omit it to reuse primary_agent for subagents
 sub_agent: "minimax/minimax-m2.5"
 max_money_spent: 1.0
 ```

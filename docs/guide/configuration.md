@@ -14,8 +14,8 @@ config = RLMConfig.default()
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `primary_agent` | `str` | `z-ai/glm-5` | Model used for the root agent |
-| `sub_agent` | `str` | `minimax/minimax-m2.5` | Model used for child subagents |
+| `primary_agent` | `str` | **(required, no default)** | Model used for the root agent. Must be set or `run()` raises. |
+| `sub_agent` | `str` | `primary_agent` | Model used for child subagents. When unset, falls back to `primary_agent`. |
 | `max_depth` | `int` | `3` | Max recursive subagent depth |
 | `max_calls_per_subagent` | `int` | `20` | Max LLM calls a single subagent can make |
 | `truncate_len` | `int` | `2000` | Output characters shown to the LLM per step |

@@ -10,6 +10,7 @@ SERVER = os.path.join(
 ALLOWED_DIR = "/tmp/mcp-fs-demo"
 
 config = RLMConfig.default()
+config.primary_agent = "minimax/minimax-m3"  # hardcoded for this test script
 config.max_calls_per_subagent = 12
 config.max_money_spent = 0.5
 

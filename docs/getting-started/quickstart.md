@@ -6,11 +6,18 @@
 
 ```python
 import fast_rlm
+from fast_rlm import RLMConfig
 
-result = fast_rlm.run("Generate 50 fruits and count number of r")
+# primary_agent is REQUIRED — there is no default model.
+config = RLMConfig(primary_agent="z-ai/glm-5")
+
+result = fast_rlm.run("Generate 50 fruits and count number of r", config=config)
 print(result["results"])
 print(result["usage"])
 ```
+
+!!! warning "`primary_agent` is required"
+    There is no default model. Every `run()` needs a config that sets `primary_agent` (e.g. `RLMConfig(primary_agent="...")`); `sub_agent` is optional and falls back to `primary_agent`. The shorter examples below omit `config=` for brevity — pass the `config` above to run them.
 
 The returned dict contains:
 

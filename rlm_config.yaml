@@ -1,8 +1,8 @@
 max_calls_per_subagent: 20
 max_depth: 3
 truncate_len: 2000
-primary_agent: "z-ai/glm-5"
-sub_agent: "minimax/minimax-m2.5"
+# primary_agent is REQUIRED and has no default — you must set it (e.g.
+# RLMConfig(primary_agent="..."). If sub_agent is omitted it copies primary_agent.
 max_money_spent: 0.2
 # API retry / timeout
 api_max_retries: 3

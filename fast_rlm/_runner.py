@@ -52,8 +52,10 @@ def _to_json_schema(schema: Any) -> dict:
 class RLMConfig:
     """Configuration for fast-rlm."""
 
-    primary_agent: str = "z-ai/glm-5"
-    sub_agent: str = "minimax/minimax-m2.5"
+    # primary_agent is REQUIRED — there is no default. run() raises if it is unset.
+    # sub_agent is optional; when unset it falls back to primary_agent.
+    primary_agent: Optional[str] = None
+    sub_agent: Optional[str] = None
     max_depth: int = 3
     max_calls_per_subagent: int = 20
     truncate_len: int = 2000
@@ -167,6 +169,9 @@ def run(
             real Python dict and the initial probe prints its top-level schema.
         prefix: Optional log filename prefix.
         config: RLMConfig object or dict of overrides (e.g. primary_agent, max_depth).
+            `primary_agent` is REQUIRED and has no default — run() raises a
+            ValueError if it is unset. `sub_agent` is optional and falls back to
+            `primary_agent` when omitted.
         verbose: If True, stream deno stdout/stderr to terminal.
         env_variables: Optional dict of string KV pairs injected as
             `os.environ` entries inside every Pyodide REPL spawned by this
@@ -209,6 +214,32 @@ def run(
     """
     _check_deno()
     engine_dir = _find_engine_dir()
+
+    # RLMConfig merge + validation (done early, before any temp files are created):
+    # load yaml defaults, overlay user overrides, REQUIRE primary_agent, and default
+    # sub_agent to primary_agent when it is unset.
+    if isinstance(config, RLMConfig):
+        cfg_dict = asdict(config)
+    else:
+        cfg_dict = dict(config) if config else {}
+
+    default_config_path = engine_dir / "rlm_config.yaml"
+    _defaults = {}
+    if default_config_path.exists():
+        with open(default_config_path) as f:
+            _defaults = yaml.safe_load(f) or {}
+    merged_config = {**_defaults, **cfg_dict}
+    if instruction is not None:
+        merged_config["instruction"] = instruction
+
+    if not merged_config.get("primary_agent"):
+        raise ValueError(
+            "primary_agent is required and has no default. Set it explicitly, e.g. "
+            "run(query, config=RLMConfig(primary_agent='z-ai/glm-5')) or "
+            "config={'primary_agent': '...'}."
+        )
+    if not merged_config.get("sub_agent"):
+        merged_config["sub_agent"] = merged_config["primary_agent"]
 
     output_file = tempfile.mktemp(suffix=".json")
     log_dir = os.path.join(os.getcwd(), "logs")
@@ -296,29 +327,12 @@ def run(
             json.dump(llm_kwargs, f)
         cmd += ["--llm-kwargs-file", llm_kwargs_tmpfile]
 
-    # RLMConfig merge: load defaults, overlay user overrides, write to temp file.
-    # Also written when `instruction` is set (it rides the same --config channel),
-    # even if no explicit config was passed.
-    config_tmpfile = None
-    if config is not None or instruction is not None:
-        if isinstance(config, RLMConfig):
-            cfg_dict = asdict(config)
-        else:
-            cfg_dict = dict(config) if config else {}
-
-        default_config_path = engine_dir / "rlm_config.yaml"
-        defaults = {}
-        if default_config_path.exists():
-            with open(default_config_path) as f:
-                defaults = yaml.safe_load(f) or {}
-        merged = {**defaults, **cfg_dict}
-        if instruction is not None:
-            merged["instruction"] = instruction
-
-        config_tmpfile = tempfile.mktemp(suffix=".yaml")
-        with open(config_tmpfile, "w") as f:
-            yaml.dump(merged, f)
-        cmd += ["--config", config_tmpfile]
+    # Write the merged+validated config (always present — primary_agent is required)
+    # to a temp file and hand it to the engine.
+    config_tmpfile = tempfile.mktemp(suffix=".yaml")
+    with open(config_tmpfile, "w") as f:
+        yaml.dump(merged_config, f)
+    cmd += ["--config", config_tmpfile]
 
     # Vertex AI: signal the Deno engine to use ADC auth
     run_env = None

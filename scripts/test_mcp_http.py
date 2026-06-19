@@ -2,6 +2,7 @@ import fast_rlm
 from fast_rlm import RLMConfig
 
 config = RLMConfig.default()
+config.primary_agent = "minimax/minimax-m3"  # hardcoded for this test script
 config.max_calls_per_subagent = 10
 config.max_money_spent = 0.5
 

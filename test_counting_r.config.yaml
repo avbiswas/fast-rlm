@@ -1,0 +1,5 @@
+# Hardcoded config for the `deno task test_counting_r` test script only.
+# primary_agent has no default in the engine, so the standalone test supplies one here.
+primary_agent: "minimax/minimax-m3"
+sub_agent: "minimax/minimax-m3"
+max_money_spent: 0.1
