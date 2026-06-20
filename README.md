@@ -55,28 +55,9 @@ export RLM_MODEL_API_KEY=sk-or-...
 |----------|-------------|---------|
 | `RLM_MODEL_API_KEY` | API key for your LLM provider | — |
 | `RLM_MODEL_BASE_URL` | OpenAI-compatible base URL | `https://openrouter.ai/api/v1` |
-| `GOOGLE_CLOUD_PROJECT` | GCP project ID (Vertex AI only) | — |
-| `GOOGLE_CLOUD_LOCATION` | GCP region (Vertex AI only) | `us-central1` |
 
-By default, fast-rlm uses [OpenRouter](https://openrouter.ai). You can point it at any OpenAI-compatible API by setting `RLM_MODEL_BASE_URL`.
+That's all you need to get started. By default, fast-rlm uses [OpenRouter](https://openrouter.ai); you can point it at any OpenAI-compatible API by setting `RLM_MODEL_BASE_URL`.
 
-### Vertex AI (Google Gemini)
-
-Use Gemini models via Vertex AI with IAM-based auth (no API key needed):
-
-```python
-import fast_rlm
-
-config = fast_rlm.RLMConfig()
-config.primary_agent = "vertex/google/gemini-2.5-flash"
-config.sub_agent = "vertex/google/gemini-2.5-flash"
-
-result = fast_rlm.run("Count the r's in 50 fruits", config=config, vertex=True)
-```
-
-Auth uses Application Default Credentials. Either run `gcloud auth application-default login` or set `GOOGLE_APPLICATION_CREDENTIALS` to a service account key path.
-
----
 
 ## Quick Start
 
@@ -342,6 +323,35 @@ All config fields:
 - **Check logs and start with strict limits** — review what the agent is doing before scaling up. Prompt changes usually help more than bigger budgets.
 
 For the full guide, see the [Best Practices & Troubleshooting](https://avbiswas.github.io/fast-rlm/guide/tips/) docs page.
+
+
+
+### Vertex AI (Google Gemini) — optional
+
+> Skip this section unless you specifically want to run Gemini models on Google Cloud. It is **not** required for the default OpenRouter (or any OpenAI-compatible) setup above.
+
+Use Gemini models via Vertex AI with IAM-based auth (no API key needed):
+
+```python
+import fast_rlm
+
+config = fast_rlm.RLMConfig()
+config.primary_agent = "vertex/google/gemini-2.5-flash"
+config.sub_agent = "vertex/google/gemini-2.5-flash"
+
+result = fast_rlm.run("Count the r's in 50 fruits", config=config, vertex=True)
+```
+
+This path uses these extra environment variables instead of `RLM_MODEL_API_KEY`:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GOOGLE_CLOUD_PROJECT` | GCP project ID | — |
+| `GOOGLE_CLOUD_LOCATION` | GCP region | `us-central1` |
+
+Auth uses Application Default Credentials. Either run `gcloud auth application-default login` or set `GOOGLE_APPLICATION_CREDENTIALS` to a service account key path.
+
+---
 
 ## Log Viewer
 
