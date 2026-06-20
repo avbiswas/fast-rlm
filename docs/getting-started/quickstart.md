@@ -36,6 +36,41 @@ The returned dict contains:
 }
 ```
 
+## From the command line
+
+The same engine ships as a `fast-rlm` CLI — a second way to run things, handy for
+one-off queries and shell pipelines.
+
+```bash
+# A plain prompt
+fast-rlm "Generate 50 fruits and count number of r" --primary-agent z-ai/glm-5
+
+# Feed a file as the context. Parsed by extension:
+#   .json / .yaml / .yml  -> dict / list        .jsonl / .ndjson -> list[dict]
+#   anything else (.csv, .tsv, .xml, .toml, .txt, ...) -> raw text the model parses
+#       itself; its extension is noted so it knows the format (the REPL has the
+#       Python 3.13 stdlib — csv, xml.etree, tomllib, ... — but no pandas/yaml).
+# The positional prompt becomes the instruction (it goes into the system prompt).
+# For a dict input with no "instruction" key, the prompt is also injected into it.
+fast-rlm "Aggregate the reviews into a verdict" --input-file reviews.json \
+    --primary-agent z-ai/glm-5
+
+# -q prints only the result (clean for piping); knobs mirror RLMConfig fields:
+fast-rlm "..." --primary-agent acp:opencode --max-depth 2 --max-global-calls 50 -q
+```
+
+Common flags: `--primary-agent`, `--sub-agent`, `--input-file`, `--max-depth`,
+`--max-calls`, `--max-global-calls`, `--acp-agents`, `--prefix`, `--vertex`,
+`-q/--quiet`. (There's no separate `--instruction` flag — the positional prompt
+is the instruction.) Run `fast-rlm --help` for the full list.
+
+The same file loading is available from Python — `run()` takes an `input_file`
+argument in place of `query`:
+
+```python
+fast_rlm.run(input_file="reviews.json", instruction="Aggregate into a verdict", config=config)
+```
+
 ## Arbitrarily long context
 
 The key idea behind RLMs is that the prompt can be arbitrarily long — far beyond any model's context window. The agent explores it programmatically through the REPL rather than trying to fit it all into a single call.

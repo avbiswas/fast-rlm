@@ -16,6 +16,7 @@ interface ValidateFunction {
 }
 import { confirmDelegation, generate_code, Usage } from "./call_llm.ts";
 import { loadConfig } from "./config.ts";
+import { isAcpModel } from "./acp.ts";
 // MCP is optional: only the *types* are imported statically (erased at compile,
 // so they pull in nothing at runtime). The implementation in ./mcp.ts — and its
 // heavy `@modelcontextprotocol/sdk` npm dependency — is loaded lazily via dynamic
@@ -24,7 +25,7 @@ import { loadConfig } from "./config.ts";
 import type { McpHandle, McpServersConfig } from "./mcp.ts";
 import { Logger, setLogDir, setLogPrefix, getLogFile } from "./logging.ts";
 import { startSpinner, showGlobalUsage } from "./ui.ts";
-import { trackUsage, getTotalUsage, resetUsage } from "./usage.ts";
+import { trackUsage, getTotalUsage, resetUsage, trackCall, getTotalCalls } from "./usage.ts";
 import chalk from "npm:chalk@5";
 
 const _ajv = new Ajv({ strict: false, allErrors: true });
@@ -74,6 +75,11 @@ const SUB_AGENT: string = _config.sub_agent ?? PRIMARY_AGENT;
 const MAX_MONEY_SPENT = _config.max_money_spent ?? Infinity;
 const MAX_COMPLETION_TOKENS = _config.max_completion_tokens ?? 50000;
 const MAX_PROMPT_TOKENS = _config.max_prompt_tokens ?? 200000;
+// ACP runs have no working token/cost budget (usage is always zero), so they get
+// a default global call ceiling of 50 unless overridden. Other backends stay
+// unlimited by default and rely on the token/cost budgets.
+const _acpRun = isAcpModel(PRIMARY_AGENT) || isAcpModel(SUB_AGENT);
+const MAX_GLOBAL_CALLS = _config.max_global_calls ?? (_acpRun ? 50 : Infinity);
 const API_MAX_RETRIES = _config.api_max_retries ?? 3;
 const API_TIMEOUT_MS = _config.api_timeout_ms ?? 600000;
 const ENABLE_TOOLS = _config.enable_tools ?? true;
@@ -328,6 +334,7 @@ await micropip.install(["requests", "httpx"])
             },
             llmKwargs ?? null,
         );
+        trackCall();
         trackUsage(verdict.usage);
         return verdict.approve;
     };
@@ -781,6 +788,7 @@ Output:\n${stdoutBuffer.trim()}
         const verdict = await confirmDelegation(
             messages, confirmQuestion, model_name, is_leaf_agent, apiOpts, promptOpts, llmKwargs ?? null,
         );
+        trackCall();
         trackUsage(verdict.usage);
         if (!verdict.approve) {
             confirmSpinner.success("Delegation rejected");
@@ -797,6 +805,17 @@ Output:\n${stdoutBuffer.trim()}
     }
 
     for (let i = 0; i < MAX_CALLS; i++) {
+        // Global call budget: stop before making a new call once the run-wide
+        // total is reached. Counts calls (not tokens), so it's the one stop gap
+        // that works universally — including ACP, where usage is always zero.
+        if (getTotalCalls() >= MAX_GLOBAL_CALLS) {
+            throw new Error(`Global call budget exceeded: ${getTotalCalls()} call(s) made, limit is ${MAX_GLOBAL_CALLS}`);
+        }
+        // Reserve this call's slot synchronously, BEFORE the await below.
+        // Concurrent sub-agents (batch_llm_query → gather) would otherwise all
+        // pass the check above before any of them incremented past the await.
+        trackCall();
+
         const llmCallStart = now();
         const llmSpinner = startSpinner("Generating code...");
         const { code, success, message, usage } = await generate_code(

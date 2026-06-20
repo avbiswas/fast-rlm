@@ -31,6 +31,11 @@ export interface RlmConfig {
     max_money_spent?: number;
     max_completion_tokens?: number;
     max_prompt_tokens?: number;
+    // Global cap on the TOTAL number of LLM calls across the whole run (root +
+    // all sub-agents, every backend). Once reached, no new calls are allowed and
+    // the loop stops. Especially important for ACP agents, where the token/cost
+    // budgets are always zero and so never trigger.
+    max_global_calls?: number;
     api_max_retries?: number;
     api_timeout_ms?: number;
     // Ablation toggles (default true). When false, the capability is removed at

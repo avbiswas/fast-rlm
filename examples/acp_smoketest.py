@@ -60,6 +60,9 @@ def run_agent(agent: str, acp_agents: dict | None = None) -> bool:
         config.sub_agent = agent
         config.max_depth = 1
         config.max_calls_per_subagent = 6
+        # Global call cap: the stop gap that actually works for ACP (token/cost
+        # budgets are always zero there). Always set this for ACP agents.
+        config.max_global_calls = 50
         config.enable_compression_guard = False  # not meaningful for single-shot tasks
         if acp_agents:
             config.acp_agents = acp_agents

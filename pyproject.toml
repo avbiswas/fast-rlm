@@ -24,6 +24,7 @@ benchmarks = [
 ]
 
 [project.scripts]
+fast-rlm = "fast_rlm._cli:main"
 fast-rlm-log = "fast_rlm._cli:view_log"
 
 [tool.hatch.build.targets.sdist]

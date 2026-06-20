@@ -102,6 +102,9 @@ acp_agents:
       real guardrail.
     - Agents with **no session modes** (e.g. cursor, hermes) have no `readonly_mode`
       and are contained by the temp cwd alone.
-- **No token usage.** ACP agents don't report token counts over the protocol, so
-  cost and token budgets (`max_money_spent`, `max_completion_tokens`,
-  `max_prompt_tokens`) read as zero for ACP-backed runs.
+- **Budgets — only `max_global_calls` works.** ACP agents report no token usage,
+  so `max_money_spent`, `max_completion_tokens`, and `max_prompt_tokens` are
+  **inert** for them (always zero, never trip). The one budget that applies is
+  [`max_global_calls`](configuration.md) — a run-wide cap on total LLM calls — which
+  **defaults to `50`** for ACP runs. Override it on the config or via
+  `--max-global-calls` if you need more or fewer.

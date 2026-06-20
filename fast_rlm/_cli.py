@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import shutil
@@ -7,6 +8,91 @@ import sys
 from fast_rlm._runner import _find_engine_dir
 
 USAGE = "Usage: fast-rlm-log <log-file.jsonl> [--stats|--tui]"
+
+
+def main():
+    """`fast-rlm` CLI entry point — a thin front door over fast_rlm.run()."""
+    p = argparse.ArgumentParser(
+        prog="fast-rlm",
+        description="Run a fast-rlm query from the command line.",
+    )
+    p.add_argument("prompt", nargs="?", default=None,
+                   help="The task/prompt. Goes into the system prompt as the "
+                        "instruction. Optional only if --input-file is given.")
+    p.add_argument("--input-file", default=None,
+                   help="Path to the input. .json/.yaml/.yml -> dict/list, "
+                        ".jsonl/.ndjson -> list[dict]; anything else (.csv, .tsv, "
+                        ".xml, .toml, .txt, ...) -> raw text the model parses "
+                        "itself (the extension is passed to it). Becomes the query "
+                        "context; the prompt stays the instruction.")
+    p.add_argument("--primary-agent", default=None,
+                   help="Root-agent model (e.g. 'z-ai/glm-5', 'acp:opencode').")
+    p.add_argument("--sub-agent", default=None,
+                   help="Sub-agent model (defaults to --primary-agent).")
+    p.add_argument("--max-depth", type=int, default=None,
+                   help="Max recursive sub-agent depth (default: RLMConfig's 3).")
+    p.add_argument("--max-calls", type=int, default=None,
+                   help="Max REPL calls per sub-agent (default: RLMConfig's 20).")
+    p.add_argument("--max-global-calls", type=int, default=None,
+                   help="Global cap on total LLM calls across the whole run "
+                        "(root + all sub-agents). Recommended for ACP agents.")
+    p.add_argument("--acp-agents", default=None,
+                   help="JSON registry of custom ACP agents (or @file.json). "
+                        "Only needed for non-preset agents.")
+    p.add_argument("--prefix", default=None, help="Log filename prefix.")
+    p.add_argument("--vertex", action="store_true",
+                   help="Route models through Vertex AI (ADC auth).")
+    p.add_argument("-q", "--quiet", action="store_true",
+                   help="Suppress the engine's streamed output.")
+    args = p.parse_args()
+
+    if not args.prompt and not args.input_file:
+        p.error("provide a prompt, --input-file, or both.")
+
+    if args.input_file and not os.path.exists(args.input_file):
+        p.error(f"input file not found: {args.input_file}")
+
+    config: dict = {}
+    if args.primary_agent:
+        config["primary_agent"] = args.primary_agent
+    if args.sub_agent:
+        config["sub_agent"] = args.sub_agent
+    if args.max_depth is not None:
+        config["max_depth"] = args.max_depth
+    if args.max_calls is not None:
+        config["max_calls_per_subagent"] = args.max_calls
+    if args.max_global_calls is not None:
+        config["max_global_calls"] = args.max_global_calls
+    if args.acp_agents:
+        raw = args.acp_agents
+        if raw.startswith("@"):
+            with open(raw[1:]) as f:
+                raw = f.read()
+        config["acp_agents"] = json.loads(raw)
+
+    # Imported here so `fast-rlm-log` and --help don't pay the import cost.
+    from fast_rlm._runner import run
+
+    # The positional prompt is always the instruction (it goes into the system
+    # prompt). With no --input-file it's also the query; otherwise run() loads the
+    # file into the query and handles the extension note / dict injection.
+    data = run(
+        query=None if args.input_file else args.prompt,
+        input_file=args.input_file,
+        instruction=args.prompt,
+        config=config or None,
+        prefix=args.prefix,
+        vertex=args.vertex,
+        verbose=not args.quiet,
+    )
+
+    results = data.get("results")
+    if isinstance(results, (dict, list)):
+        print(json.dumps(results, indent=2, ensure_ascii=False))
+    else:
+        print(results)
+    if data.get("log_file"):
+        print(f"\nLog: {data['log_file']}", file=sys.stderr)
 
 
 def _print_stats(log_path: str):

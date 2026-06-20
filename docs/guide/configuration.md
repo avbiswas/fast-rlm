@@ -22,6 +22,7 @@ config = RLMConfig.default()
 | `max_money_spent` | `float` | `1.0` | Budget cap in USD — raises an error once cumulative spend exceeds it (see note below; it's a soft cap, not a hard ceiling) |
 | `max_completion_tokens` | `int` | `50000` | Max total completion tokens across all subagents — raises an error if exceeded |
 | `max_prompt_tokens` | `int` | `200000` | Max total prompt tokens across all subagents — raises an error if exceeded |
+| `max_global_calls` | `int` | `∞` (`50` for ACP) | Max total LLM calls across the whole run (root + all subagents, every backend) — raises an error once reached. Counts calls, not tokens, so it's the only budget that works for [ACP agents](acp-agents.md). |
 
 ### Modifying config
 

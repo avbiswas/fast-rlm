@@ -40,6 +40,9 @@ if __name__ == "__main__":
     config.sub_agent = agent
     config.max_depth = 1                 # root + one level of sub-agents
     config.max_calls_per_subagent = 12   # headroom for retries
+    # Global call cap: the stop gap that actually works for ACP (token/cost
+    # budgets are always zero there). Always set this for ACP agents.
+    config.max_global_calls = 50
     config.enable_compression_guard = False  # tiny contexts; avoid extra spawns
 
     data = fast_rlm.run(

@@ -77,6 +77,34 @@ print(result["usage"])
 
 > **`primary_agent` is required.** Every `run()` needs a config that sets it (e.g. `RLMConfig(primary_agent="...")`); `sub_agent` is optional and defaults to `primary_agent`. The shorter examples below omit `config=` for brevity — pass the `config` above to run them.
 
+### From the command line
+
+The same engine is available as a `fast-rlm` CLI — handy for one-off runs and shell pipelines:
+
+```bash
+# A plain prompt
+fast-rlm "Generate 50 fruits and count number of r" --primary-agent z-ai/glm-5
+
+# Feed a file as the context. Parsed by extension:
+#   .json/.yaml/.yml -> dict/list   .jsonl/.ndjson -> list[dict]
+#   anything else (.csv, .tsv, .xml, .toml, .txt, ...) -> raw text the model parses
+#       itself (its extension is noted so it knows the format).
+# The prompt becomes the instruction; for a dict input with no "instruction" key,
+# it's also injected into the dict.
+fast-rlm "Aggregate the reviews into a verdict" --input-file reviews.json --primary-agent z-ai/glm-5
+
+# -q prints only the result (clean for piping); other knobs mirror RLMConfig:
+fast-rlm "..." --primary-agent acp:opencode --max-depth 2 --max-global-calls 50 -q
+```
+
+Run `fast-rlm --help` for all flags (`--sub-agent`, `--max-calls`, `--acp-agents`, `--vertex`, …).
+
+The same file loading is available from Python — `run()` accepts an `input_file` (in place of `query`):
+
+```python
+fast_rlm.run(input_file="reviews.json", instruction="Aggregate into a verdict", config=config)
+```
+
 ## Arbitrarily Long Context
 
 The key idea behind RLMs is that the prompt can be arbitrarily long — far beyond any model's context window. The agent explores it programmatically through the REPL rather than trying to fit it all into a single call.
@@ -313,6 +341,7 @@ All config fields:
 | `max_money_spent` | `float` | `1.0` | Hard budget cap in USD |
 | `max_completion_tokens` | `int` | `50000` | Max total completion tokens across all subagents |
 | `max_prompt_tokens` | `int` | `200000` | Max total prompt tokens across all subagents |
+| `max_global_calls` | `int` | `∞` (50 for ACP) | Max total LLM calls across the whole run (root + all subagents) |
 
 ## Best Practices & Troubleshooting
 
@@ -499,8 +528,10 @@ silences the provider's "authMethodId is not configured" warning), and `env?`.
   asks, so the temp `cwd` is its real guardrail).
 - Agents with **no session modes** (e.g. cursor, hermes) are contained by the temp
   `cwd` alone.
-- ACP agents **don't report token usage**, so cost/token budgets read as zero for
-  them.
+- **Budgets:** ACP agents report no token usage, so `max_money_spent`,
+  `max_completion_tokens`, and `max_prompt_tokens` are **inert** for them (always
+  zero, never trip). The only budget that works is **`max_global_calls`**, which
+  **defaults to `50`** for ACP runs (override it on the config/CLI as needed).
 
 ---
 

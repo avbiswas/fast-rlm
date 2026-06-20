@@ -62,6 +62,11 @@ class RLMConfig:
     max_money_spent: float = 0.2
     max_completion_tokens: int = 50000
     max_prompt_tokens: int = 200000
+    # Global cap on the TOTAL number of LLM calls across the whole run (root +
+    # all sub-agents, every backend). None = unlimited. Once reached, no new
+    # calls are made and the run stops. The only budget that bites for ACP,
+    # where token/cost usage is always zero — set it for any ACP run.
+    max_global_calls: Optional[int] = None
     api_max_retries: int = 3
     api_timeout_ms: int = 600000
     # Ablation toggles. When False, the capability is removed from the agent's
@@ -154,8 +159,46 @@ def _extract_tool_source(tool: Callable) -> str:
     return textwrap.dedent(src)
 
 
+def _string_path_note(ext: str) -> str:
+    """Note appended to the instruction for raw-text inputs, telling the model
+    what kind of file it is so it can parse it itself (csv/xml/toml/... are all
+    in the REPL's Python 3.13 stdlib; pandas and PyYAML are not)."""
+    label = f"a `.{ext}` file" if ext else "a file"
+    return (
+        f"The input context is the raw text of {label}. pandas is NOT available "
+        f"in the REPL — use the Python standard library to parse it if needed "
+        f"(e.g. `csv` for CSV/TSV, `xml.etree.ElementTree` for XML, `tomllib` for TOML)."
+    )
+
+
+def _load_input_file(path: str):
+    """Load an input file by extension. Returns (value, ext).
+
+    Structured formats are parsed host-side into a Python object:
+      .json            -> dict / list / scalar
+      .jsonl / .ndjson -> list[dict] (one object per line)
+      .yaml / .yml     -> dict / list  (the REPL has no `yaml`, so we parse here)
+
+    Everything else is passed as raw text; the model parses it itself using the
+    extension (returned as `ext`) as the hint. This scales to large files and
+    lets the model slice instead of us dumping a parsed structure.
+    """
+    ext = os.path.splitext(path)[1].lower().lstrip(".")
+    if ext == "json":
+        with open(path) as f:
+            return json.load(f), ext
+    if ext in ("jsonl", "ndjson"):
+        with open(path) as f:
+            return [json.loads(line) for line in f if line.strip()], ext
+    if ext in ("yaml", "yml"):
+        with open(path) as f:
+            return yaml.safe_load(f), ext
+    with open(path) as f:
+        return f.read(), ext
+
+
 def run(
-    query: "str | dict",
+    query: "str | dict | list | None" = None,
     prefix: Optional[str] = None,
     config: Optional[RLMConfig | dict] = None,
     verbose: bool = True,
@@ -166,13 +209,15 @@ def run(
     llm_kwargs: Optional[dict] = None,
     vertex: bool = False,
     instruction: Optional[str] = None,
+    input_file: Optional[str] = None,
 ) -> dict:
     """Run a fast-rlm query.
 
     Args:
-        query: The question / context to process. Either a string or a JSON-
-            serializable dict — when a dict, the agent receives `context` as a
-            real Python dict and the initial probe prints its top-level schema.
+        query: The question / context to process. A string, a JSON-serializable
+            dict, or a list — when a dict/list, the agent receives `context` as a
+            real Python object and the initial probe prints its top-level schema.
+            Optional when `input_file` is given (provide exactly one of the two).
         prefix: Optional log filename prefix.
         config: RLMConfig object or dict of overrides (e.g. primary_agent, max_depth).
             `primary_agent` is REQUIRED and has no default — run() raises a
@@ -214,12 +259,34 @@ def run(
             confirmation calls). When provided, a section of the form
             ``Here is the user's instructions - you must follow it closely:\n
             {instruction}`` is added. When None, nothing is appended.
+        input_file: Optional path to a file used as the query instead of `query`
+            (pass one or the other, not both). Loaded by extension:
+            `.json`/`.yaml`/`.yml` -> dict/list, `.jsonl`/`.ndjson` -> list[dict],
+            anything else -> raw text the model parses itself (the extension is
+            noted in the instruction so it knows the format). When the loaded
+            value is a dict with no ``instruction`` key, `instruction` is injected
+            into it.
 
     Returns:
         Dict with 'results', 'usage', and optionally 'log_file'.
     """
     _check_deno()
     engine_dir = _find_engine_dir()
+
+    # Resolve input_file into the query (so the CLI can be a thin shim). This is
+    # the file-type contract above; raw-text inputs also get an extension note
+    # appended to the instruction so the model knows how to parse them.
+    if input_file is not None:
+        if query is not None:
+            raise ValueError("Pass either `query` or `input_file`, not both.")
+        query, _ext = _load_input_file(input_file)
+        if isinstance(query, dict) and instruction and "instruction" not in query:
+            query["instruction"] = instruction
+        if isinstance(query, str):
+            _note = _string_path_note(_ext)
+            instruction = f"{instruction}\n\n{_note}" if instruction else _note
+    if query is None:
+        raise ValueError("Provide either `query` or `input_file`.")
 
     # RLMConfig merge + validation (done early, before any temp files are created):
     # load yaml defaults, overlay user overrides, REQUIRE primary_agent, and default
@@ -281,9 +348,9 @@ def run(
     if prefix:
         cmd += ["--prefix", prefix]
 
-    if not isinstance(query, (str, dict)):
+    if not isinstance(query, (str, dict, list)):
         raise TypeError(
-            f"query must be a str or dict, got {type(query).__name__}"
+            f"query must be a str, dict, or list, got {type(query).__name__}"
         )
     stdin_payload = json.dumps(query)
 
