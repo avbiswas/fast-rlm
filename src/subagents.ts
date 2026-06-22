@@ -24,7 +24,7 @@ import { isAcpModel } from "./acp.ts";
 // MCP never fetch or load the SDK.
 import type { McpHandle, McpServersConfig } from "./mcp.ts";
 import { Logger, setLogDir, setLogPrefix, getLogFile } from "./logging.ts";
-import { startSpinner, showGlobalUsage } from "./ui.ts";
+import { startSpinner, showGlobalUsage, printStep } from "./ui.ts";
 import { trackUsage, getTotalUsage, resetUsage, trackCall, getTotalCalls } from "./usage.ts";
 import chalk from "npm:chalk@5";
 
@@ -844,6 +844,12 @@ Output:\n${stdoutBuffer.trim()}
                 step: i + 1, code, reasoning: message.reasoning, usage,
                 timestamps: { llm_call_start: llmCallStart, llm_call_end: llmCallEnd },
             });
+            printStep({
+                run_id: logger.run_id, parent_run_id, depth: subagent_depth,
+                step: i + 1, maxSteps: MAX_CALLS, code, reasoning: message.reasoning,
+                usage, totalUsage: getTotalUsage(),
+                timestamps: { llm_call_start: llmCallStart, llm_call_end: llmCallEnd },
+            });
 
             messages.push({
                 "role": "user",
@@ -905,6 +911,12 @@ Output:\n${stdoutBuffer.trim()}
                     usage,
                     timestamps: stepTimestamps,
                 });
+                printStep({
+                    run_id: logger.run_id, parent_run_id, depth: subagent_depth,
+                    step: i + 1, maxSteps: MAX_CALLS, code, output: truncatedErr,
+                    hasError: true, reasoning: message.reasoning,
+                    usage, totalUsage: getTotalUsage(), timestamps: stepTimestamps,
+                });
                 messages.push({
                     "role": "user",
                     "content": `${budgetBanner(i, MAX_CALLS)}Output: \n${truncatedErr}`,
@@ -913,6 +925,12 @@ Output:\n${stdoutBuffer.trim()}
             }
 
             logger.logStep({ step: i + 1, code, reasoning: message.reasoning, usage, timestamps: stepTimestamps });
+            printStep({
+                run_id: logger.run_id, parent_run_id, depth: subagent_depth,
+                step: i + 1, maxSteps: MAX_CALLS, code, output: truncatedText,
+                reasoning: message.reasoning,
+                usage, totalUsage: getTotalUsage(), timestamps: stepTimestamps,
+            });
             logger.logFinalResult(result);
             logger.logAgentEnd();
             return result;
@@ -928,7 +946,12 @@ Output:\n${stdoutBuffer.trim()}
             usage,
             timestamps: stepTimestamps,
         });
-
+        printStep({
+            run_id: logger.run_id, parent_run_id, depth: subagent_depth,
+            step: i + 1, maxSteps: MAX_CALLS, code, output: truncatedText,
+            hasError, reasoning: message.reasoning,
+            usage, totalUsage: getTotalUsage(), timestamps: stepTimestamps,
+        });
 
         messages.push({
             "role": "user",

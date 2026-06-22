@@ -24,10 +24,39 @@ const ACP_PREFIX = "acp:";
 
 // Built-in presets — only the three we've verified end-to-end. Every other
 // agent comes in through the `acp_agents` backdoor in config.
+// Config files injected into the throwaway cwd before each agent launch.
+// The ACP provider spawns the agent with cwd=tempDir, so these are picked up
+// as project-level configs — stripping all tool access and forcing the agent
+// to behave as a pure text model (no bash, no file reads, no writes).
+//
+// Each agent has its own config format:
+//   claude-code → .claude/settings.json  (permissions.deny glob list)
+//   opencode    → opencode.json          (permission.<tool>: "deny")
+//   codex       → -c sandbox_permissions=[] CLI flag (added to args)
+const CLAUDE_CODE_CONFIG = {
+    ".claude/settings.json": {
+        permissions: {
+            deny: ["Bash(*)", "Read(*)", "Write(*)", "Edit(*)", "MultiEdit(*)", "WebFetch(*)", "WebSearch(*)"],
+        },
+    },
+};
+
+const OPENCODE_CONFIG = {
+    "opencode.json": {
+        permission: {
+            bash: "deny",
+            read: "deny",
+            edit: "deny",
+            glob: "deny",
+            grep: "deny",
+        },
+    },
+};
+
 const PRESETS: Record<string, AcpAgentSpec> = {
-    "claude-code": { command: "npx", args: ["-y", "@zed-industries/claude-code-acp"], readonly_mode: "plan", auth_method: "claude-login" },
-    "codex": { command: "npx", args: ["-y", "@zed-industries/codex-acp"], readonly_mode: "read-only", auth_method: "chatgpt" },
-    "opencode": { command: "opencode", args: ["acp"], readonly_mode: "plan", auth_method: "opencode-login" },
+    "claude-code": { command: "npx", args: ["-y", "@zed-industries/claude-code-acp"], readonly_mode: "plan", auth_method: "claude-login", config_files: CLAUDE_CODE_CONFIG },
+    "codex": { command: "npx", args: ["-y", "@zed-industries/codex-acp", "-c", "sandbox_permissions=[]"], readonly_mode: "read-only", auth_method: "chatgpt" },
+    "opencode": { command: "opencode", args: ["acp"], readonly_mode: "plan", auth_method: "opencode-login", config_files: OPENCODE_CONFIG },
 };
 
 export function isAcpModel(model: string): boolean {
@@ -78,6 +107,20 @@ function toAiSdkMessages(messages: any[]): any[] {
         }));
 }
 
+// Appended to the system prompt for every ACP call. Reinforces that the agent
+// must not use its own native tooling (bash, file reads, web search, etc.) and
+// must work exclusively through the Python REPL provided by fast-rlm.
+const ACP_SYSTEM_ADDENDUM = `
+** IMPORTANT: ACP execution constraints **
+You are running as a backend model inside the fast-rlm Recursive Language Model framework. In this context, you are ONLY permitted to interact with the environment through the Python REPL described above — specifically the \`context\` variable, \`llm_query\`, \`batch_llm_query\`, \`FINAL\`, and any tools explicitly passed to you.
+
+You must NOT use any native tools or capabilities that come with your agent harness — this includes bash execution, file system reads or writes, web search, web fetch, or any other ReAct-style tool your underlying system may provide.
+
+This is a controlled research evaluation of raw Python REPL reasoning ability, deliberately isolated from traditional agentic tool use. Using your harness tools instead of the REPL is considered cheating and invalidates the evaluation. Every computation, data access, and result must flow through the REPL.
+
+If you cannot accomplish something purely within the REPL, say so — do not reach for external tools.
+`;
+
 function extractReplCode(content: string): string {
     const replMatches = [...content.matchAll(/```repl([\s\S]*?)```/g)];
     return replMatches.map((m) => m[1].trim()).join("\n");
@@ -107,6 +150,19 @@ async function acpComplete(
 ): Promise<{ text: string; usage: Usage }> {
     const { spec, modelId } = parseAcpModel(model_name);
     const cwd = await Deno.makeTempDir({ prefix: "fast_rlm_acp_" });
+
+    // Write agent-specific config files into the throwaway cwd before launch.
+    // The provider spawns with cwd=tempDir, so each agent picks these up as its
+    // project config, stripping all tool access (bash, reads, writes, web).
+    if (spec.config_files) {
+        for (const [relPath, content] of Object.entries(spec.config_files)) {
+            const abs = `${cwd}/${relPath}`;
+            const dir = abs.substring(0, abs.lastIndexOf("/"));
+            await Deno.mkdir(dir, { recursive: true });
+            await Deno.writeTextFile(abs, JSON.stringify(content, null, 2));
+        }
+    }
+
     const provider = createACPProvider({
         command: spec.command,
         args: spec.args ?? [],
@@ -118,7 +174,7 @@ async function acpComplete(
         // languageModel(modelId, modeId): both are applied automatically when the
         // fresh session is created, so no separate initSession/setMode round-trip.
         const lm = provider.languageModel(modelId, spec.readonly_mode);
-        const system = buildSystemPrompt(is_leaf_agent, promptOpts ?? {});
+        const system = buildSystemPrompt(is_leaf_agent, promptOpts ?? {}) + ACP_SYSTEM_ADDENDUM;
         const timeout = options?.timeout;
         const result = await generateText({
             model: lm,

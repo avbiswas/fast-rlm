@@ -90,6 +90,33 @@ acp_agents:
 | `model`         | no       | Default model id (overridable per call via `?model=`). |
 | `auth_method`   | no       | ACP auth method id (e.g. `chatgpt`). Pinning it silences the provider's "authMethodId is not configured" warning; only consulted on the lazy-auth fallback path. |
 | `env`           | no       | Extra environment variables for the agent process. |
+| `config_files`  | no       | Map of relative paths → JSON content to write into the temp cwd before launch. Use this to inject per-agent permission configs for custom agents (e.g. `{".claude/settings.json": {"permissions": {"deny": ["Bash(*)"]}}}` for a custom Claude Code variant). |
+
+## Tool stripping (built-in presets only)
+
+A key goal of fast-rlm's ACP mode is that **all computation happens in the Pyodide
+REPL**, not inside the agent's own tool harness. Without restrictions, capable
+agents like Claude Code will use their native bash/file-read tools to pre-compute
+answers internally, then return hardcoded results — bypassing the observable REPL
+loop entirely.
+
+The three built-in presets prevent this by injecting agent-specific permission
+configs into the throwaway cwd before each launch:
+
+| Agent | Mechanism | Effect |
+| ----- | --------- | ------ |
+| `acp:claude-code` | `.claude/settings.json` written to temp cwd | Denies `Bash(*)`, `Read(*)`, `Write(*)`, `Edit(*)`, `WebFetch(*)`, `WebSearch(*)` via Claude's permissions system |
+| `acp:opencode` | `opencode.json` written to temp cwd | Sets `bash`, `read`, `edit`, `glob`, `grep` to `"deny"` as project-level config |
+| `acp:codex` | `-c sandbox_permissions=[]` flag in launch args | Passes an empty permissions array to the codex binary at startup |
+
+After stripping, the agent can only return text (specifically ` ```repl ``` ` blocks).
+All data access, computation, and side-effects go through the REPL.
+
+> **Backdoor agents do not get this automatically.** Agents registered via
+> `acp_agents` are launched as-is — no config files are injected, no permission
+> flags are added. If you want to restrict a custom agent, add a `config_files`
+> entry to its spec (see the `AcpAgentSpec` fields below) or set `readonly_mode`
+> to the agent's own permission mode id.
 
 ## Safety & limitations
 

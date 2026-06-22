@@ -49,7 +49,7 @@ export interface StepData {
 }
 
 export function printStep(data: StepData): void {
-    const { depth, step, maxSteps, code, output, hasError, usage, totalUsage } = data;
+    const { depth, step, maxSteps, code, output, hasError, reasoning, usage, totalUsage } = data;
     const w = boxWidth(depth);
     const parts: string[] = [];
 
@@ -57,6 +57,18 @@ export function printStep(data: StepData): void {
     const title = ` Depth ${depth} · Step ${step}/${maxSteps} `;
     const side = Math.max(2, Math.floor((w - title.length) / 2));
     parts.push(chalk.bold.blue(`${"─".repeat(side)}${title}${"─".repeat(side)}`));
+
+    // Reasoning panel (extended thinking / chain-of-thought)
+    if (reasoning) {
+        parts.push(boxen(chalk.magenta(reasoning), {
+            title: "Reasoning",
+            titleAlignment: "left",
+            borderColor: "magenta",
+            borderStyle: "round",
+            padding: { left: 1, right: 1, top: 0, bottom: 0 },
+            width: w,
+        }));
+    }
 
     // Code panel
     if (code) {

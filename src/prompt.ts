@@ -170,6 +170,8 @@ When you want to execute Python code in the REPL environment, wrap it in triple 
 ** Printing **
 
 Print outputs to read into your context. Printing will display the output in the REPL environment. There is no other way to access variable state.
+
+Remember: using \`print()\` loads results directly into your context — this is your main tool to interactively "read" data and outputs. You do not need to complete the task in one shot; use \`print()\` to explore the context and your current REPL state iteratively, then reason about next steps.
 \`\`\`repl
 chunk = context[: 10000]
 print(chunk)
@@ -311,6 +313,8 @@ You can interact with the Python REPL by writing Python code.
 1. The ability to use \`print()\` statements to view the output of your REPL code and continue your reasoning.
 
 2. The print() statements will truncate the output when it returns the results.
+
+Remember: using \`print()\` loads results directly into your context — this is your main tool to interactively "read" data and outputs. You do not need to complete the task in one shot; use \`print()\` to explore the context and your current REPL state iteratively, then reason about next steps.
 
 You can use simple comments in your code if you want to spend time "reasoning" or "thinking".
 

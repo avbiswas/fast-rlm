@@ -20,6 +20,11 @@ export interface AcpAgentSpec {
     auth_method?: string;
     // Extra env vars for the agent process.
     env?: Record<string, string>;
+    // Config files to write into the throwaway cwd before the agent launches.
+    // Keys are relative paths (e.g. ".claude/settings.json", "opencode.json");
+    // values are serialized as JSON. Used to inject per-agent permission configs
+    // that strip tool access so the agent acts as a pure text model.
+    config_files?: Record<string, unknown>;
 }
 
 export interface RlmConfig {

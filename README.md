@@ -590,7 +590,29 @@ run(query, config=RLMConfig(
 
 Each entry accepts `command`, `args?`, `readonly_mode?` (the agent's read-only mode
 id, if it has one), `model?`, `auth_method?` (ACP auth method id — pinning it
-silences the provider's "authMethodId is not configured" warning), and `env?`.
+silences the provider's "authMethodId is not configured" warning), `env?`, and
+`config_files?` (relative path → JSON content written into the temp cwd before
+launch — use this to inject permission configs for custom agents).
+
+**Tool stripping (built-in presets only):**
+
+fast-rlm's goal is that all computation happens in the Pyodide REPL — not inside
+the agent's own tool harness. Without restrictions, agents like Claude Code will use
+their native bash/file-read tools to pre-compute answers internally and return
+hardcoded results, bypassing the observable REPL loop. The three built-in presets
+block this by injecting agent-specific permission configs into the throwaway cwd
+before each launch:
+
+| Agent | Mechanism |
+| ----- | --------- |
+| `acp:claude-code` | `.claude/settings.json` written to temp cwd — denies `Bash(*)`, `Read(*)`, `Write(*)`, `Edit(*)`, `WebFetch(*)`, `WebSearch(*)` |
+| `acp:opencode`    | `opencode.json` written to temp cwd — sets `bash`, `read`, `edit`, `glob`, `grep` to `"deny"` |
+| `acp:codex`       | `-c sandbox_permissions=[]` flag in launch args — empty permissions array |
+
+> **Backdoor agents do not get this automatically.** Agents registered via
+> `acp_agents` are launched as-is. To restrict a custom agent, add a `config_files`
+> entry to its spec (see the [ACP agents guide](docs/guide/acp-agents.md)) or set
+> its `readonly_mode` field.
 
 **Safety & caveats:**
 
