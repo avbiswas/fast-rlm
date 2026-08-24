@@ -1,0 +1,1283 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Recursive Language Models">
+      
+      
+      
+        <link rel="canonical" href="https://avbiswas.github.io/fast-rlm/guide/sessions/">
+      
+      
+        <link rel="prev" href="../configuration/">
+      
+      
+        <link rel="next" href="../advanced/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Resumable Sessions - fast-rlm</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="deep-purple" data-md-color-accent="purple">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#resumable-sessions" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="fast-rlm" class="md-header__button md-logo" aria-label="fast-rlm" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            fast-rlm
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Resumable Sessions
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="deep-purple" data-md-color-accent="purple"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="deep-purple" data-md-color-accent="purple"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/avbiswas/fast-rlm" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    avbiswas/fast-rlm
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="fast-rlm" class="md-nav__button md-logo" aria-label="fast-rlm" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    fast-rlm
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/avbiswas/fast-rlm" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    avbiswas/fast-rlm
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resumable Sessions
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resumable Sessions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#where-state-lives" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where state lives
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-persists" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What persists
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-resumed-agent-sees" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the resumed agent sees
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#should-the-resumed-agent-see-its-earlier-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Should the resumed agent see its earlier code?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-commit-tool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The commit() tool
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inspecting-a-session-from-python" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inspecting a session from Python
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#viewing-a-session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Viewing a session
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scope-and-guarantees" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope and guarantees
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../advanced/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Advanced Customization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli-agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Agents
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../acp-agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ACP Agents
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../log-viewer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Log Viewer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tips/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Best Practices & Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/from-source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    From Source
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#where-state-lives" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where state lives
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-persists" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What persists
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-resumed-agent-sees" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the resumed agent sees
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#should-the-resumed-agent-see-its-earlier-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Should the resumed agent see its earlier code?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-commit-tool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The commit() tool
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inspecting-a-session-from-python" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inspecting a session from Python
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#viewing-a-session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Viewing a session
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scope-and-guarantees" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope and guarantees
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="resumable-sessions">Resumable Sessions</h1>
+<p>A <code>Session</code> lets follow-up queries reuse the work of earlier ones instead of re-exploring from scratch. There is no long-lived process — each <code>query()</code> is a normal run, and what persists between runs is the root agent's REPL state.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">fast_rlm</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">session</span> <span class="o">=</span> <span class="n">fast_rlm</span><span class="o">.</span><span class="n">Session</span><span class="p">(</span><span class="n">session_dir</span><span class="o">=</span><span class="s2">"sessions"</span><span class="p">,</span> <span class="n">session_id</span><span class="o">=</span><span class="s2">"podcasts"</span><span class="p">,</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>                           <span class="n">config</span><span class="o">=</span><span class="p">{</span><span class="s2">"primary_agent"</span><span class="p">:</span> <span class="s2">"z-ai/glm-5"</span><span class="p">})</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">r1</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">"Here are all transcripts... Build a guest index and "</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>                   <span class="s2">"summarize what the ML guests said about AGI.</span><span class="se">\n</span><span class="s2">"</span> <span class="o">+</span> <span class="n">transcripts</span><span class="p">)</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">r2</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">"Using the index you already built: which guests were most "</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>                   <span class="s2">"optimistic about AGI timelines?"</span><span class="p">)</span>   <span class="c1"># no re-exploration</span>
+</code></pre></div>
+<h2 id="where-state-lives">Where state lives</h2>
+<p>Both arguments are optional, and how you pass them decides whether anything touches disk:</p>
+<table>
+<thead>
+<tr>
+<th>Call</th>
+<th>State location</th>
+<th>Resumable later?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Session()</code></td>
+<td>private temp dir, <strong>auto-deleted</strong> on close / GC / exit</td>
+<td>No — every <code>Session()</code> is a clean slate</td>
+</tr>
+<tr>
+<td><code>Session(session_dir="runs")</code></td>
+<td><code>runs/state.json</code></td>
+<td>Yes — re-open the same dir</td>
+</tr>
+<tr>
+<td><code>Session(session_dir="runs", session_id="podcasts")</code></td>
+<td><code>runs/podcasts/state.json</code></td>
+<td>Yes — <code>session_id</code> namespaces many sessions under one dir</td>
+</tr>
+<tr>
+<td><code>Session(session_id="podcasts")</code></td>
+<td>—</td>
+<td><code>ValueError</code>: an id needs a dir</td>
+</tr>
+</tbody>
+</table>
+<p>The default <code>Session()</code> is <strong>ephemeral</strong>: queries in the same object still share variables, but nothing is written to a path a later run could accidentally resume — so experiments never pick up stale state by mistake. Close it early with <code>session.close()</code> or a <code>with</code> block; otherwise it is cleaned up when the object is collected or the process exits.</p>
+<p>Also available as <code>fast_rlm.run(..., session_dir=..., session_id=...)</code> and <code>fast-rlm --session-dir ... --session-id ...</code>.</p>
+<h2 id="what-persists">What persists</h2>
+<p>After <strong>every step</strong> of the root agent, the engine sweeps the REPL into <code>&lt;session_dir&gt;/state.json</code> (written atomically — a killed run resumes from its last completed step):</p>
+<table>
+<thead>
+<tr>
+<th>Saved</th>
+<th>How</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Picklable variables (≤ 5 MB each)</td>
+<td>pickled; restored live into the next run's REPL</td>
+</tr>
+<tr>
+<td>REPL-defined functions &amp; classes</td>
+<td>as <strong>source</strong> (recovered from the step code), re-executed on resume</td>
+</tr>
+<tr>
+<td>Comments next to assignments</td>
+<td>attached to the variable they describe, shown in the resume inventory</td>
+</tr>
+<tr>
+<td>Query → <code>FINAL</code> ledger</td>
+<td>shown to the resumed agent</td>
+</tr>
+<tr>
+<td>The code of every step</td>
+<td>shown to the resumed agent (failed steps compressed to one line)</td>
+</tr>
+</tbody>
+</table>
+<p>Not saved: <code>context</code> (it holds each query anew), open handles, generators, JS proxies — these are listed as <em>dropped</em> so the resumed agent knows what's missing.</p>
+<blockquote>
+<p>The 5 MB per-variable cap is generous — it comfortably holds indexes, parsed corpora, and embeddings for typical workloads, and a variable over the cap is reported in <code>session.dropped()</code> rather than silently lost. To rebalance the sweep cost, unchanged large immutable values (e.g. a loaded corpus string) are re-used from an in-process cache instead of being re-pickled on every step.</p>
+</blockquote>
+<h2 id="what-the-resumed-agent-sees">What the resumed agent sees</h2>
+<p>A resumed query starts a <strong>fresh conversation</strong> (the old one is not carried; per-query context stays bounded no matter how old the session is), seeded with:</p>
+<ol>
+<li>a preamble: earlier queries + <code>FINAL</code> answers, and the full code dump — the agent's own comments double as notes;</li>
+<li>the step-0 probe printing the ground-truth inventory of restored variables (type, preview, comment, note) and any restore failures.</li>
+</ol>
+<h2 id="should-the-resumed-agent-see-its-earlier-code">Should the resumed agent see its earlier code?</h2>
+<p>By default it does, controlled by <code>add_session_code_to_context</code> (default <code>True</code>; CLI <code>--no-session-code</code> to turn it off):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">session</span> <span class="o">=</span> <span class="n">fast_rlm</span><span class="o">.</span><span class="n">Session</span><span class="p">(</span><span class="n">session_dir</span><span class="o">=</span><span class="s2">"runs/podcasts"</span><span class="p">,</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>                           <span class="n">add_session_code_to_context</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>  <span class="c1"># default</span>
+</code></pre></div>
+<p>The restored variables alone are enough for the agent to <em>answer</em> a follow-up, so it's natural to ask whether the code dump earns its place in the prompt. We measured it: a synthetic-corpus session where the first query builds an index + helper, followed by six follow-up queries answered purely from the restored state (the corpus is never re-sent), run identically with the code dump ON vs OFF.</p>
+<p><strong>Settings:</strong> <code>google/gemini-3.5-flash</code> via OpenRouter; 40-episode synthetic podcast corpus; per-query input prompt tokens and answer correctness recorded on independent session directories.</p>
+<table>
+<thead>
+<tr>
+<th>query</th>
+<th style="text-align: right;">code ON — input tokens</th>
+<th style="text-align: right;">code OFF — input tokens</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Q1 (build)</td>
+<td style="text-align: right;">58,678</td>
+<td style="text-align: right;">72,738</td>
+</tr>
+<tr>
+<td>Q2</td>
+<td style="text-align: right;">16,757</td>
+<td style="text-align: right;">56,223</td>
+</tr>
+<tr>
+<td>Q3</td>
+<td style="text-align: right;">8,577</td>
+<td style="text-align: right;">23,634</td>
+</tr>
+<tr>
+<td>Q4</td>
+<td style="text-align: right;">8,737</td>
+<td style="text-align: right;">63,881</td>
+</tr>
+<tr>
+<td>Q5</td>
+<td style="text-align: right;">8,881</td>
+<td style="text-align: right;">32,978</td>
+</tr>
+<tr>
+<td>Q6</td>
+<td style="text-align: right;">8,983</td>
+<td style="text-align: right;">32,685</td>
+</tr>
+<tr>
+<td>Q7</td>
+<td style="text-align: right;">9,131</td>
+<td style="text-align: right;">32,822</td>
+</tr>
+<tr>
+<td><strong>total</strong></td>
+<td style="text-align: right;"><strong>119,744</strong></td>
+<td style="text-align: right;"><strong>314,961</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Both variants answered <strong>every</strong> query correctly. But with the code dump ON, per-query cost stays flat (~8–9k tokens) and the whole session is <strong>~2.6× cheaper</strong> — because the agent reuses <em>how</em> it built things instead of re-exploring the restored state from scratch each time. Keeping the earlier code is the recommended default; turn it off only when minimizing the resume prompt matters more than resume efficiency.</p>
+<blockquote>
+<p>The code dump grows with the amount of <em>new code</em> each query writes, not with the number of queries. In the reuse pattern above, follow-ups add only a line or two each (~100–200 chars), so the dump stayed tiny (~3.5 KB after seven queries). A session where every query does heavy multi-step work is the case to watch.</p>
+</blockquote>
+<h2 id="the-commit-tool">The <code>commit()</code> tool</h2>
+<p>Inside the REPL the root agent has <code>commit(name, note=None)</code> — auto-saving is the safety net, <code>commit</code> is curation: attach a human-readable note to a variable, or force-save names the sweep skips (like <code>context</code>). Committed variables carry <code>committed: true</code> and the note in the state file.</p>
+<h2 id="inspecting-a-session-from-python">Inspecting a session from Python</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">session</span><span class="o">.</span><span class="n">queries</span><span class="p">()</span>    <span class="c1"># [{"query": ..., "final": ...}] — completed ledger</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">session</span><span class="o">.</span><span class="n">variables</span><span class="p">()</span>  <span class="c1"># {name: {type, preview, comment, note, committed}}</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">session</span><span class="o">.</span><span class="n">functions</span><span class="p">()</span>  <span class="c1"># {name: source}</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">session</span><span class="o">.</span><span class="n">dropped</span><span class="p">()</span>    <span class="c1"># {name: reason it could not be saved}</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">session</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>      <span class="c1"># delete state; next query starts fresh</span>
+</code></pre></div>
+<p><code>variables()</code> never exposes the pickled bytes — values are only unpickled inside the REPL on resume.</p>
+<h2 id="viewing-a-session">Viewing a session</h2>
+<p><code>fast-rlm-log</code> shows a session's query timeline across all its runs — point it at the session directory (or its <code>state.json</code>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>fast-rlm-log runs/podcasts            # text summary (--stats, default)
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>fast-rlm-log runs/podcasts --tui      # interactive session timeline
+</code></pre></div>
+<p><strong><code>--stats</code></strong> prints each completed query, its <code>FINAL</code>, and — for runs recorded since session log-linking — that run's step count, tokens, and cost pulled from its <code>.jsonl</code> transcript, plus a session-wide total.</p>
+<p><strong><code>--tui</code></strong> opens an interactive session view (requires <code>bun</code>): an animated query timeline with per-query token/cost bars. Select a query with <code>↑↓</code> and press <code>Enter</code> to drill into that run's full step-by-step transcript (code, output, <code>I</code> for the user input, <code>R</code> reasoning, <code>O</code> final output, sub-agents, timeline); <code>[</code> / <code>]</code> move between queries and <code>Esc</code> returns to the session overview. Press <code>m</code> for the <strong>session memory</strong> inspector — a master-detail view of the state a resumed query inherits: a selectable list of saved variables (committed ones first, <code>★</code>), functions, and dropped names on the left; <code>↑↓</code> selects an entry and the right pane expands its full content — the variable's value preview with its comment/note, or the function's syntax-highlighted source — scrollable with <code>J/K</code>.</p>
+<p>Sessions created before log-linking won't have the run links — they show <code>(not linked)</code> in <code>--stats</code> and can't be drilled into, but their state still loads and resumes normally.</p>
+<h2 id="scope-and-guarantees">Scope and guarantees</h2>
+<ul>
+<li><strong>Root agent only.</strong> Sub-agents never see or contribute session state; they stay fresh and isolated.</li>
+<li><strong>Saved code is shown, never re-executed</strong> (replaying old <code>llm_query</code> calls would be non-deterministic and cost money). The only re-execution is function/class definitions, which are deterministic.</li>
+<li><strong>Not a 1:1 process clone</strong> — it is a directory of your agent's variables and notes, which is exactly what a follow-up query needs.</li>
+</ul>
+<blockquote>
+<p><strong>One live query per session directory.</strong> State is written per step with no cross-process lock, so two queries running against the same persistent session dir at the same time (in one process or across processes) will race and one can clobber the other's saved state. Run queries in a session serially; use separate <code>session_id</code>s (or separate dirs) for concurrent work.</p>
+</blockquote>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.copy", "content.code.annotate", "navigation.sections", "navigation.expand", "navigation.top", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
