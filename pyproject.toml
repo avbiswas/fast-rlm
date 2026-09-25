@@ -19,8 +19,18 @@ Repository = "https://github.com/avbiswas/fast-rlm"
 "Original Paper" = "https://arxiv.org/abs/2512.24601"
 
 [project.optional-dependencies]
+graph = [
+    "networkx>=3.0",
+]
+graph-native = [
+    "datasets>=4.0,<5",
+    "jupyterlab>=4.0",
+    "networkx>=3.0",
+    "notebook>=7.0",
+    "pydantic>=2.0",
+]
 benchmarks = [
-    "datasets==3.6.0",
+    "datasets>=4.0,<5",
 ]
 
 [project.scripts]
@@ -63,5 +73,6 @@ packages = ["fast_rlm"]
 
 [dependency-groups]
 dev = [
+    "networkx>=3.0",
     "pytest>=9.1.1",
 ]

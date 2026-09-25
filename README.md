@@ -188,9 +188,82 @@ fruits = await llm_query("Generate 25 fruit names.", schema)
 
 The child subagent enforces the schema the same way. See [`examples/structured_io.py`](examples/structured_io.py) and [`examples/parallel_r_count.py`](examples/parallel_r_count.py) for end-to-end demos.
 
+## Graph Channel
+
+For the WebQSP graph-native notebook, run `uv sync --extra graph-native` and then launch it with `uv run jupyter lab`. This uses the repository's local editable FastRLM package; it does not download a separate FastRLM release. For NetworkX support alone, use `pip install "fast-rlm[graph]"`. Then pass a graph separately from the model-visible query:
+
+```python
+result = fast_rlm.run(
+    {"question": question},
+    graph=combined_graph,
+    config=RLMConfig(primary_agent=model, max_graph_hops=4),
+)
+```
+
+`q_entity` is optional. When supplied, the graph child uses it as the traversal seed. When omitted, the child deterministically matches question phrases against real graph node IDs, name/label/title/alias attributes, and label edges. Candidates below `min_entity_confidence` (default `0.75`) are rejected; configure it with `RLMConfig(min_entity_confidence=0.85)`. If no verified node matches, it returns an empty graph instead of guessing. Seed precision and recall are logged when a reference `q_entity` is present; question-only runs report them as unavailable.
+
+For repeated questions, prepare the graph once so entity lookup does not rebuild its in-memory exact/trigram index:
+
+```python
+indexed_graph = fast_rlm.prepare_graph(combined_graph)
+result = fast_rlm.run({"question": question}, graph=indexed_graph, config=config)
+```
+
+Call `prepare_graph()` again after changing node labels, aliases, or recognized label relationships. This in-memory index targets approximately 10k–100k nodes; larger graphs need the same resolver interface backed by a disk/search index and a host-owned graph store that returns bounded NetworkX working subgraphs.
+
+The root RLM receives a real NetworkX object named `graph`. Graph-producing delegation uses a dedicated channel rather than overloading ordinary structured results:
+
+```repl
+subgraph = await graph_query(
+    context,
+    graph=graph,
+    instruction="Traverse with NetworkX and return only the relevant evidence graph.",
+)
+```
+
+The graph child receives its own graph copy and must finish with `GRAPH_FINAL(relevant_graph)`. The parent receives another real NetworkX graph copy. Ordinary `llm_query` and `FINAL` keep their existing value-oriented behavior, graphs are never inherited implicitly, and mutations are isolated between runtimes. See [`examples/webqsp_graph_native.ipynb`](examples/webqsp_graph_native.ipynb).
+
+Graph runs use compact graph-specific prompts and write `graph_channel_open`, `graph_query_start`, `graph_seed_resolution`, `graph_final`, and `graph_query_result` audit events. These record graph types/sizes, the configured hop limit, NetworkX operations, the bounded list of selected seed node IDs, and whether those seeds came from `q_entity` or question matching, without logging the graph payload. Set `max_graph_queries` to cap graph-child calls and `max_graph_hops` to bound returned paths from each question entity. Graph children may return an empty graph when the available evidence is insufficient; the root then returns the no-answer value required by the caller's output schema.
+
+### Neo4j-backed graphs
+
+Keep the full graph in Neo4j by passing a `Neo4jGraph` through the same `graph=` argument. The schema is model-visible, but the connection and credentials remain in the Deno host and are never placed in the prompt or logs:
+
+```python
+import os
+
+import fast_rlm
+from fast_rlm import Neo4jGraph, RLMConfig
+
+webqsp_schema = """
+(:WebQSPExample {id, source_id, question, split, q_entity_json})
+(:WebQSPEntity {key, name})
+(:WebQSPEntity)-[:RELATED {predicate}]->(:WebQSPEntity)
+""".strip()
+
+neo4j_graph = Neo4jGraph(
+    uri=os.getenv("NEO4J_URI", "neo4j://localhost:7687"),
+    username=os.getenv("NEO4J_USERNAME", "neo4j"),
+    password=os.environ["NEO4J_PASSWORD"],
+    database=os.getenv("NEO4J_DATABASE", "neo4j"),
+    schema=webqsp_schema,
+)
+model = os.environ["RLM_MODEL"]
+
+result = fast_rlm.run(
+    {"question": "what does jamaican people speak"},
+    graph=neo4j_graph,
+    config=RLMConfig(primary_agent=model, max_depth=1, max_graph_hops=4),
+)
+```
+
+The root delegates with `graph_query(context)`. Its graph child receives exactly one database operation, `await execute_read_only_cypher(query, parameters, limit)`, which executes bounded read-only Cypher and returns a real NetworkX `MultiDiGraph`. Neo4j nodes, relationships, and paths become NetworkX nodes and edges; scalar projections are retained in `graph.graph["records"]`. A child may make up to `max_cypher_queries` calls, then returns at most 20 selected edges with `GRAPH_FINAL`. Use a server-side read-only Neo4j account as defense in depth. See [`examples/webqsp_neo4j_graph_native.ipynb`](examples/webqsp_neo4j_graph_native.ipynb).
+
+Neo4j runs additionally log `neo4j_query_start`, `neo4j_query_result`, and `neo4j_query_rejected`. These events include counts, parameter names, timing, truncation, and graph sizes, but exclude parameter values and credentials.
+
 ## Tools
 
-Inside the REPL the agent has two built-in tools and may also receive user-defined tools as ordinary Python functions. There is no separate tool-calling API — tools are just callables in the REPL namespace.
+Inside the REPL the agent normally has two built-in tools and may also receive user-defined tools as ordinary Python functions. Graph-enabled roots additionally receive `graph_query`. There is no separate provider tool-calling API — tools are just callables in the REPL namespace.
 
 Pass Python functions to `fast_rlm.run(..., tools=[my_fn])` and they will be pre-loaded into the root agent's REPL. The RLM is shown the function name, input names, and docstring as description. They are not shown the full internal code of the tool (although they can choose to inspect it if the task requires them to). The agent calls them like any normal function inside the REPL.
 
@@ -392,6 +465,12 @@ All config fields:
 | `max_completion_tokens` | `int` | `50000` | Max total completion tokens across all subagents (cumulative) |
 | `max_prompt_tokens` | `int` | `200000` | **Per-call** ceiling on a single LLM call's input + output tokens (not a run-wide sum). Bounds how large any one agent's context may grow; the run stops when a single call exceeds it. |
 | `max_global_calls` | `int` | `∞` (50 for ACP) | Max total LLM calls across the whole run (root + all subagents) |
+| `max_graph_queries` | `int` | `∞` | Max `graph_query` calls across the whole run |
+| `max_graph_hops` | `int` | `4` | Max path length a graph child may return from a question entity |
+| `min_entity_confidence` | `float` | `0.75` | Minimum indexed entity-match confidence for NetworkX graph children |
+| `max_cypher_queries` | `int` | `5` | Max Cypher attempts for each Neo4j graph child |
+| `max_cypher_rows` | `int` | `100` | Max rows retained from each Neo4j query |
+| `cypher_timeout_ms` | `int` | `15000` | Neo4j read-transaction timeout in milliseconds |
 
 ## Progress & verbosity
 
@@ -422,7 +501,7 @@ def on_step(event: dict):
 result = fast_rlm.run("...", config=config, on_step=on_step)
 ```
 
-Each `event` is a dict with `event_type` (`"code_generated"`, `"execution_result"`, or `"final_result"`), `run_id`, `parent_run_id`, and `depth`. Step events also carry `step`, `code`, `output`, `hasError`, `reasoning`, `usage`, `totalUsage`, and `timestamps` — the same data written to the JSONL log, delivered as it happens. `on_step` runs in a background thread and fires at any verbosity (including `"silent"`); an exception it raises is caught and warned about rather than aborting the run.
+Each `event` is a dict with `event_type`, `run_id`, `parent_run_id`, and `depth`. Normal values are `"code_generated"`, `"execution_result"`, and `"final_result"`; graph runs also emit `"graph_channel_open"`, `"graph_query_start"`, `"graph_final"`, and `"graph_query_result"`. Step events also carry `step`, `code`, `output`, `hasError`, `reasoning`, `usage`, `totalUsage`, and `timestamps` — the same data written to the JSONL log, delivered as it happens. `on_step` runs in a background thread and fires at any verbosity (including `"silent"`); an exception it raises is caught and warned about rather than aborting the run.
 
 ## Best Practices & Troubleshooting
 

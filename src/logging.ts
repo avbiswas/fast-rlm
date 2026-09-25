@@ -15,6 +15,8 @@ export type { StepData };
 // ── Pino logger setup ───────────────────────────────────────────────
 
 let pinoLogger: pino.Logger;
+let pinoDestination: ReturnType<typeof pino.destination>;
+let pinoDestinationReady = false;
 let currentLogFile: string | null = null;
 let logPrefix: string | null = null;
 let logDir = "./logs";
@@ -46,11 +48,15 @@ function initPino() {
         const prefix = logPrefix ? `${logPrefix}_` : "run_";
         currentLogFile = `${logDir}/${prefix}${timestamp}.jsonl`;
 
+        pinoDestination = pino.destination({ dest: currentLogFile, sync: false });
+        pinoDestination.on("ready", () => {
+            pinoDestinationReady = true;
+        });
         pinoLogger = pino({
             level: "info",
             timestamp: pino.stdTimeFunctions.isoTime,
             base: null, // Skip hostname/pid to avoid --allow-sys requirement
-        }, pino.destination({ dest: currentLogFile, sync: false }));
+        }, pinoDestination);
 
         if (getVerbosity() >= 2) {
             console.log(chalk.dim(`📝 Logging to: ${currentLogFile}\n`));
@@ -96,6 +102,18 @@ export class Logger {
         }).info({
             event_type: "agent_end",
         });
+    }
+
+    logEvent(event_type: string, data: Record<string, unknown> = {}): void {
+        const event = {
+            event_type,
+            run_id: this.run_id,
+            parent_run_id: this.parent_run_id,
+            depth: this.depth,
+            ...data,
+        };
+        initPino().info(event);
+        emitEvent(event);
     }
 
     logStep(data: Omit<StepData, "run_id" | "parent_run_id" | "depth" | "maxSteps" | "totalUsage">): void {
@@ -173,7 +191,13 @@ export class Logger {
 
     static async flush(): Promise<void> {
         if (pinoLogger) {
-            await pinoLogger.flush();
+            if (!pinoDestinationReady) {
+                await new Promise<void>((resolve) => {
+                    pinoDestination.once("ready", resolve);
+                });
+            }
+            pinoLogger.flush();
+            pinoDestination.flushSync();
         }
     }
 }

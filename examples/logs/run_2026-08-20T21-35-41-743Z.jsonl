@@ -1,0 +1,2 @@
+{"level":30,"time":"2026-08-20T21:35:41.746Z","run_id":"1787261741743-20dn2a7ux","depth":0,"event_type":"agent_start"}
+{"level":30,"time":"2026-08-20T21:35:41.746Z","event_type":"graph_channel_open","run_id":"1787261741743-20dn2a7ux","depth":0,"max_graph_hops":4,"graph":{"backend":"networkx","graph_type":"MultiDiGraph","nodes":62813,"edges":195828}}

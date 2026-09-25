@@ -14,6 +14,14 @@ from typing import Any, Callable, Optional
 
 import yaml
 
+from fast_rlm._graph import (
+    IndexedGraph,
+    Neo4jGraph,
+    encode_neo4j_graph,
+    encode_networkx_graph,
+    prepare_graph,
+)
+
 
 # Verbosity levels, shared with the Deno engine (--verbosity N):
 #   0 silent  — no terminal output at all
@@ -179,6 +187,19 @@ class RLMConfig:
     # calls are made and the run stops. The only budget that bites for ACP,
     # where token/cost usage is always zero — set it for any ACP run.
     max_global_calls: Optional[int] = None
+    # Run-wide cap on graph_query calls. None leaves graph delegation unrestricted.
+    max_graph_queries: Optional[int] = None
+    # Maximum path length a graph child may return from a question entity.
+    max_graph_hops: int = 4
+    min_entity_confidence: float = 0.75
+    # Neo4j limits apply separately to each graph-processing child.
+    max_cypher_queries: int = 5
+    max_cypher_rows: int = 100
+    cypher_timeout_ms: int = 15000
+    max_neo4j_observation_bytes: int = 8192
+    max_neo4j_transcript_bytes: int = 10240
+    max_neo4j_query_artifact_bytes: int = 1048576
+    max_neo4j_evidence_bytes: int = 5242880
     api_max_retries: int = 3
     api_timeout_ms: int = 600000
     # Ablation toggles. When False, the capability is removed from the agent's
@@ -188,6 +209,8 @@ class RLMConfig:
     #                             and dict/list inputs (shown to the agent as str)
     enable_tools: bool = True
     enable_structured_io: bool = True
+    # Encode structured print output as TOON in NetworkX and Neo4j REPLs.
+    enable_toon_output: bool = True
     # Compression guard: when an agent delegates a large, barely-compressed
     # context to a subagent, make it self-confirm (same model, same system
     # prompt) before the call runs; NO blocks and forces a compress + retry.
@@ -329,6 +352,8 @@ def run(
     session_dir: Optional[str] = None,
     session_id: Optional[str] = None,
     add_session_code_to_context: bool = True,
+    graph: Optional[Any] = None,
+    evaluation_q_entity: Optional[Any] = None,
 ) -> dict:
     """Run a fast-rlm query.
 
@@ -426,6 +451,15 @@ def run(
             ledger and restored variables are shown) when minimizing prompt
             size matters more than resume efficiency. No effect without a
             session.
+        graph: Optional raw NetworkX graph, ``IndexedGraph`` returned by
+            ``fast_rlm.prepare_graph``, or ``Neo4jGraph`` connection source.
+            NetworkX inputs are transported outside the model prompt and
+            reconstructed as real NetworkX objects. Neo4j inputs remain in the
+            host process; graph children write bounded read-only Cypher and
+            receive NetworkX evidence through the same ``GRAPH_FINAL`` channel.
+        evaluation_q_entity: Optional reference entity or list of entities used
+            only for host-side seed precision/recall logging. It is never added
+            to the model context or prompt.
 
     Returns:
         Dict with 'results', 'usage', and 'log_file' (path to the run's
@@ -478,6 +512,39 @@ def run(
         )
     if not merged_config.get("sub_agent"):
         merged_config["sub_agent"] = merged_config["primary_agent"]
+    max_graph_hops = merged_config.get("max_graph_hops", 4)
+    if (
+        isinstance(max_graph_hops, bool)
+        or not isinstance(max_graph_hops, int)
+        or max_graph_hops < 1
+    ):
+        raise ValueError("max_graph_hops must be a positive integer")
+    merged_config["max_graph_hops"] = max_graph_hops
+    min_entity_confidence = merged_config.get("min_entity_confidence", 0.75)
+    if (
+        isinstance(min_entity_confidence, bool)
+        or not isinstance(min_entity_confidence, (int, float))
+        or not 0.0 <= float(min_entity_confidence) <= 1.0
+    ):
+        raise ValueError("min_entity_confidence must be a number between 0 and 1")
+    merged_config["min_entity_confidence"] = float(min_entity_confidence)
+    enable_toon_output = merged_config.get("enable_toon_output", True)
+    if not isinstance(enable_toon_output, bool):
+        raise ValueError("enable_toon_output must be a boolean")
+    merged_config["enable_toon_output"] = enable_toon_output
+    for name, default in (
+        ("max_cypher_queries", 5),
+        ("max_cypher_rows", 100),
+        ("cypher_timeout_ms", 15000),
+        ("max_neo4j_observation_bytes", 8192),
+        ("max_neo4j_transcript_bytes", 10240),
+        ("max_neo4j_query_artifact_bytes", 1048576),
+        ("max_neo4j_evidence_bytes", 5242880),
+    ):
+        value = merged_config.get(name, default)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"{name} must be a positive integer")
+        merged_config[name] = value
 
     output_file = tempfile.mktemp(suffix=".json")
     log_dir = log_dir if log_dir is not None else os.path.join(os.getcwd(), "logs")
@@ -586,6 +653,40 @@ def run(
             json.dump(llm_kwargs, f)
         cmd += ["--llm-kwargs-file", llm_kwargs_tmpfile]
 
+    graph_tmpfile = None
+    neo4j_tmpfile = None
+    if graph is not None:
+        if isinstance(graph, Neo4jGraph):
+            descriptor, neo4j_tmpfile = tempfile.mkstemp(suffix=".neo4j.json")
+            try:
+                os.fchmod(descriptor, 0o600)
+                with os.fdopen(descriptor, "w") as f:
+                    json.dump(encode_neo4j_graph(graph), f, allow_nan=False)
+            except Exception:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+                if os.path.exists(neo4j_tmpfile):
+                    os.unlink(neo4j_tmpfile)
+                raise
+            cmd += ["--neo4j-file", neo4j_tmpfile]
+        else:
+            if not isinstance(graph, IndexedGraph):
+                graph = prepare_graph(graph)
+            graph_artifact = encode_networkx_graph(graph)
+            graph_tmpfile = tempfile.mktemp(suffix=".graph.json")
+            with open(graph_tmpfile, "w") as f:
+                json.dump(graph_artifact, f, allow_nan=False)
+            cmd += ["--graph-file", graph_tmpfile]
+
+    evaluation_q_entity_tmpfile = None
+    if evaluation_q_entity is not None:
+        evaluation_q_entity_tmpfile = tempfile.mktemp(suffix=".evaluation_q_entity.json")
+        with open(evaluation_q_entity_tmpfile, "w") as f:
+            json.dump(evaluation_q_entity, f, allow_nan=False)
+        cmd += ["--evaluation-q-entity-file", evaluation_q_entity_tmpfile]
+
     # Write the merged+validated config (always present — primary_agent is required)
     # to a temp file and hand it to the engine.
     config_tmpfile = tempfile.mktemp(suffix=".yaml")
@@ -655,6 +756,12 @@ def run(
             os.unlink(mcp_tmpfile)
         if llm_kwargs_tmpfile and os.path.exists(llm_kwargs_tmpfile):
             os.unlink(llm_kwargs_tmpfile)
+        if graph_tmpfile and os.path.exists(graph_tmpfile):
+            os.unlink(graph_tmpfile)
+        if neo4j_tmpfile and os.path.exists(neo4j_tmpfile):
+            os.unlink(neo4j_tmpfile)
+        if evaluation_q_entity_tmpfile and os.path.exists(evaluation_q_entity_tmpfile):
+            os.unlink(evaluation_q_entity_tmpfile)
 
     if "error" in data:
         raise RuntimeError(f"fast-rlm subagent failed: {data['error']}")

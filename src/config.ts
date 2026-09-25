@@ -41,6 +41,16 @@ export interface RlmConfig {
     // the loop stops. Especially important for ACP agents, where the token/cost
     // budgets are always zero and so never trigger.
     max_global_calls?: number;
+    max_graph_queries?: number;
+    max_graph_hops?: number;
+    min_entity_confidence?: number;
+    max_cypher_queries?: number;
+    max_cypher_rows?: number;
+    cypher_timeout_ms?: number;
+    max_neo4j_observation_bytes?: number;
+    max_neo4j_transcript_bytes?: number;
+    max_neo4j_query_artifact_bytes?: number;
+    max_neo4j_evidence_bytes?: number;
     api_max_retries?: number;
     api_timeout_ms?: number;
     // Ablation toggles (default true). When false, the capability is removed at
@@ -48,6 +58,7 @@ export interface RlmConfig {
     enable_tools?: boolean;
     enable_structured_io?: boolean;
     enable_compression_guard?: boolean;
+    enable_toon_output?: boolean;
     compression_min_chars?: number;
     compression_ratio?: number;
     instruction?: string;

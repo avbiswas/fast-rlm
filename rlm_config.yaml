@@ -7,10 +7,20 @@ max_money_spent: 0.2
 # API retry / timeout
 api_max_retries: 3
 api_timeout_ms: 30000
+# Neo4j-backed graph limits. Query count is per graph-processing child.
+max_cypher_queries: 5
+max_cypher_rows: 100
+cypher_timeout_ms: 15000
+max_neo4j_observation_bytes: 8192
+max_neo4j_transcript_bytes: 10240
+max_neo4j_query_artifact_bytes: 1048576
+max_neo4j_evidence_bytes: 5242880
 # Ablation toggles (default true). Set false to remove the capability from the
 # agent's REPL and strip it from the system prompt (applies to root + sub-agents).
 enable_tools: true
 enable_structured_io: true
+# Encode structured print output as TOON in NetworkX and Neo4j REPLs.
+enable_toon_output: true
 # Compression guard: force a self-confirm before delegating a large,
 # barely-compressed context to a subagent (ablatable).
 enable_compression_guard: true

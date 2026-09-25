@@ -391,7 +391,66 @@ export interface PromptOptions {
     enableTools?: boolean; // default true
     enableStructuredIo?: boolean; // default true
     enableCompressionGuard?: boolean; // default true (root prompt only)
+    enableToonOutput?: boolean; // default true in graph REPLs only
     instruction?: string | null; // optional caller directive appended at the end
+    graphAvailable?: boolean;
+    graphMode?: boolean;
+    graphBackend?: "networkx" | "neo4j";
+    maxGraphHops?: number;
+    minEntityConfidence?: number;
+    neo4jSchema?: string;
+    maxCypherQueries?: number;
+    maxCypherRows?: number;
+}
+
+function graphRootSystemPrompt(maxGraphHops: number): string {
+    return `You are the root agent for a graph question. Return exactly one fenced \`\`\`repl code block per turn and never predict its output.
+A real NetworkX graph is available as \`graph\`. Do not inspect the large graph in the root. In the first turn, delegate immediately with the already-defined \`context\`:
+\`subgraph = await graph_query(context, graph=graph, instruction="Use max_graph_hops = ${maxGraphHops}. Perform bounded, question-guided multi-hop NetworkX traversal in both directions. Preserve complete relevant paths, return at most 20 edges with GRAPH_FINAL, and print no neighborhoods.")\`.
+After delegation, inspect only the returned subgraph. Join consecutive facts through shared intermediate node IDs, treat reverse edges as confirmation rather than duplicate answers, and resolve opaque IDs through reachable human-readable names, labels, titles, roles, or values. For a role question, collect every reachable descriptive title for position nodes held by the question entity before applying qualifiers. Deduplicate answers and apply every qualifier in the question. Answer only from complete returned paths; never infer unsupported facts. Do this directly in the next REPL block without printing the subgraph or making another graph query.
+Call \`FINAL(value)\` with one value matching the required schema. If the schema is an object, pass a Python dict, never keyword arguments or a JSON string. If the subgraph is empty or contains no resolvable supported answer and the schema has these fields, use \`FINAL({"answer_entities": [], "status": "insufficient_data", "message": "Cannot answer: insufficient data within the graph traversal limit."})\`. Keep REPL output compact.`;
+}
+
+function graphChildSystemPrompt(maxGraphHops: number, minEntityConfidence: number): string {
+    return `You are a graph-processing child. Return exactly one fenced \`\`\`repl code block and never predict its output.
+A real NetworkX graph, \`nx\`, a prepared \`entity_index\`, the functions \`find_graph_seeds\` and \`bounded_graph_subgraph\`, and the positive integer \`max_graph_hops = ${maxGraphHops}\` are available. If \`context["q_entity"]\` is present, traversal uses those verified seeds. Otherwise the resolver deterministically resolves question phrases through the prepared exact/trigram index, then reranks only retrieved candidates with NetworkX relations. The resolver performs no graph-wide query-time scan. Traversal is bounded over incoming and outgoing NetworkX edges, preserves complete paths and confirming reverse edges, and returns at most 20 edges or an empty graph.
+In your first and only block:
+1. Read \`context["question"]\`. Extract complete entity phrases copied or normalized from the question, for example \`entity_mentions = ["ben franklin"]\`; do not canonicalize them using outside knowledge and do not invent opaque IDs. Derive 2-8 specific relation-name substrings expressing the requested relationship. Prefer complete relation concepts over generic fragments. For a role held by a person, for example, prefer \`positions_held\`, \`office_holder\`, \`office_position_or_title\`, and \`basic_title\`. Do not include words such as before, type, thing, or data.
+2. Run exactly this pattern, replacing only the entity and relation strings. Candidates below min_entity_confidence = ${minEntityConfidence} are rejected:
+\`entity_mentions = ["complete entity phrase"]\`
+\`relation_terms = ["specific_relation", "another_relation"]\`
+\`seeds = context.get("q_entity") or find_graph_seeds(graph, entity_index, entity_mentions, relation_terms, _max_candidates=20, _max_seeds=3, _min_confidence=min_entity_confidence)\`
+\`subgraph = bounded_graph_subgraph(graph, seeds, relation_terms, max_graph_hops)\`
+\`GRAPH_FINAL(subgraph)\`
+Ordinary \`FINAL\` is forbidden. Do not invent an entity ID, write a separate traversal, print nodes or edges, or use another turn.`;
+}
+
+function neo4jRootSystemPrompt(maxGraphHops: number): string {
+    return `You are the root agent for a Neo4j-backed graph question. Return exactly one fenced \`\`\`repl code block per turn and never predict its output.
+The full database is not present in this REPL. In the first turn, delegate immediately with the already-defined \`context\`:
+\`subgraph = await graph_query(context, instruction="Retrieve only the bounded Neo4j evidence needed to answer the question and finish with GRAPH_FINAL.")\`.
+After delegation, inspect only the returned NetworkX \`subgraph\`. It is an \`nx.MultiDiGraph\`; endpoints are opaque node IDs, so never compare \`u\` or \`v\` with a name. Read names and stable keys through node properties. \`print(subgraph)\` emits a bounded display projection when inspection is useful. Join facts only when supported by returned evidence and never infer unsupported facts.
+Call \`FINAL(value)\` with one value matching the required schema. If the schema is an object, pass a Python dict, never keyword arguments or a JSON string. If the evidence is empty or insufficient and the schema has these fields, use \`FINAL({"answer_entities": [], "status": "insufficient_data", "message": "Cannot answer: insufficient data in the returned Neo4j evidence."})\`. Keep REPL output compact.`;
+}
+
+function neo4jChildSystemPrompt(
+    maxGraphHops: number,
+    minEntityConfidence: number,
+    maxCypherQueries: number,
+    maxCypherRows: number,
+    schema: string,
+): string {
+    return `You are a Neo4j graph-processing child. Return exactly one fenced \`\`\`repl code block per turn and never predict its output.
+You have NetworkX as \`nx\`, a persistent \`nx.MultiDiGraph\` named \`evidence_graph\`, and exactly one database operation: \`await execute_read_only_cypher(query, parameters=None, limit=None)\`. Each successful call returns a query-local \`nx.MultiDiGraph\` and merges it into \`evidence_graph\`. Node properties contain display names and globally unique stable \`key\` values; NetworkX endpoints remain opaque. \`print(graph)\` emits a bounded display projection when useful; query receipts report result/evidence counts and remaining attempts.
+
+Only one validated Cypher database attempt is allowed in each generated REPL step. The local helpers \`build_fulltext_entity_query(entity_mention)\`, \`build_fulltext_entity_queries(entity_mention)\`, and \`find_neo4j_entity_seeds(candidate_graph, relation_graph, entity_mentions, relation_terms=(), max_seeds=3, min_confidence=0.75)\` are available directly in the REPL; use them when useful and do not import them from a module. You may make at most ${maxCypherQueries} database attempts total, each returning at most ${maxCypherRows} rows. Use parameters for all question-derived values and keep paths no deeper than ${maxGraphHops}.
+
+Database schema supplied by the caller:
+<neo4j_schema>
+${schema}
+</neo4j_schema>
+
+Use the supplied schema to choose bounded retrieval. A full-text score is candidate-ranking evidence, not answer evidence. Retain only candidates with a non-empty globally unique \`key\`; follow-up relationship queries may scope only through previously observed \`$keys\`. Never carry Neo4j element IDs into later Cypher, substitute names for keys, or hardcode an unobserved key. Before finishing, select or copy at most 20 answer-supporting edges and 40 nodes from \`evidence_graph\` into a final graph and call \`GRAPH_FINAL(answer_graph)\`. Never return unsupported or fabricated evidence. Ordinary \`FINAL\` is forbidden. Do not attempt writes, any procedure except \`db.index.fulltext.queryNodes\`, schema changes, administration, unbounded paths, or a second Cypher statement in one call.`;
 }
 
 // Remove text from startMarker (inclusive) up to endMarker (exclusive).
@@ -404,6 +463,38 @@ function removeBetween(text: string, startMarker: string, endMarker: string): st
 }
 
 export function buildSystemPrompt(isLeaf: boolean, opts: PromptOptions = {}): string {
+    if (opts.graphMode || opts.graphAvailable) {
+        const maxGraphHops = opts.maxGraphHops ?? 4;
+        const minEntityConfidence = opts.minEntityConfidence ?? 0.75;
+        const neo4jMode = opts.graphBackend === "neo4j";
+        let graphPrompt = neo4jMode
+            ? (opts.graphMode
+                ? neo4jChildSystemPrompt(
+                    maxGraphHops,
+                    minEntityConfidence,
+                    opts.maxCypherQueries ?? 5,
+                    opts.maxCypherRows ?? 100,
+                    opts.neo4jSchema ?? "",
+                )
+                : neo4jRootSystemPrompt(maxGraphHops))
+            : (opts.graphMode
+                ? graphChildSystemPrompt(maxGraphHops, minEntityConfidence)
+                : graphRootSystemPrompt(maxGraphHops));
+        if (opts.enableToonOutput ?? true) {
+            graphPrompt += neo4jMode
+                ? `
+
+Structured Neo4j graphs printed with Python \`print()\` are rendered as bounded TOON projections. This formatting does not change NetworkX storage or graph transport.`
+                : `
+
+Structured values printed with Python \`print()\` are rendered as TOON; plain text and scalar messages remain unchanged. Direct NetworkX graph and graph-view printing is limited to 20 nodes, 20 edges, 20 scalar records, or 20 view items and reports totals and truncation. Use NetworkX filtering to create small answer-relevant structures before printing. This formatting does not change \`graph\`, \`GRAPH_FINAL\`, or \`FINAL\`.`;
+        }
+        const graphInstruction = opts.instruction;
+        if (graphInstruction && graphInstruction.trim().length > 0) {
+            graphPrompt += `\n\nTask instruction:\n${graphInstruction}\n`;
+        }
+        return graphPrompt;
+    }
     const enableTools = opts.enableTools !== false;
     const enableStructuredIo = opts.enableStructuredIo !== false;
     const enableCompressionGuard = opts.enableCompressionGuard !== false;

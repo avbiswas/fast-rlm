@@ -37,6 +37,36 @@ import {
 } from "./session.ts";
 import type { SessionState, SessionVariable, SweepResult } from "./session.ts";
 import { trackUsage, getTotalUsage, resetUsage, trackCall, getTotalCalls } from "./usage.ts";
+import {
+    assertGraphArtifact,
+    consumeGraphQuery,
+    entityPrecisionRecall,
+    graphFinalSetup,
+    GRAPH_QUERY_PY,
+    GRAPH_RUNTIME_PY,
+    NEO4J_CYPHER_PY,
+    NEO4J_GRAPH_QUERY_PY,
+    NEO4J_INSPECTION_PY,
+    graphArtifactSummary,
+    resolveMaxGraphHops,
+    resolveMinEntityConfidence,
+    seedEntityNames,
+    TOON_PRINT_PY,
+} from "./graph.ts";
+import type { GraphArtifact } from "./graph.ts";
+import { pyProxyToJs } from "./pyodide.ts";
+import {
+    assertNeo4jSource,
+    connectNeo4j,
+    CypherAttemptGate,
+    cypherQuerySignature,
+    executeNeo4jRead,
+    neo4jErrorMetadata,
+    neo4jQueryMetadata,
+    neo4jSourceSummary,
+    validateReadOnlyCypher,
+} from "./neo4j.ts";
+import type { Neo4jHandle, Neo4jSource } from "./neo4j.ts";
 import chalk from "npm:chalk@5";
 
 const _ajv = new Ajv({ strict: false, allErrors: true });
@@ -99,11 +129,44 @@ const MAX_PROMPT_TOKENS = _config.max_prompt_tokens ?? 200000;
 // unlimited by default and rely on the token/cost budgets.
 const _acpRun = isAcpModel(PRIMARY_AGENT) || isAcpModel(SUB_AGENT);
 const MAX_GLOBAL_CALLS = _config.max_global_calls ?? (_acpRun ? 50 : Infinity);
+const MAX_GRAPH_QUERIES = _config.max_graph_queries ?? Infinity;
+const MAX_GRAPH_HOPS = resolveMaxGraphHops(_config.max_graph_hops);
+const MIN_ENTITY_CONFIDENCE = resolveMinEntityConfidence(_config.min_entity_confidence);
+function positiveInteger(value: unknown, fallback: number, name: string): number {
+    const resolved = value ?? fallback;
+    if (typeof resolved !== "number" || !Number.isInteger(resolved) || resolved < 1) {
+        throw new Error(`${name} must be a positive integer`);
+    }
+    return resolved;
+}
+const MAX_CYPHER_QUERIES = positiveInteger(_config.max_cypher_queries, 5, "max_cypher_queries");
+const MAX_CYPHER_ROWS = positiveInteger(_config.max_cypher_rows, 100, "max_cypher_rows");
+const CYPHER_TIMEOUT_MS = positiveInteger(_config.cypher_timeout_ms, 15000, "cypher_timeout_ms");
+const MAX_NEO4J_OBSERVATION_BYTES = positiveInteger(
+    _config.max_neo4j_observation_bytes, 8192, "max_neo4j_observation_bytes",
+);
+const MAX_NEO4J_TRANSCRIPT_BYTES = positiveInteger(
+    _config.max_neo4j_transcript_bytes, 10240, "max_neo4j_transcript_bytes",
+);
+const MAX_NEO4J_QUERY_ARTIFACT_BYTES = positiveInteger(
+    _config.max_neo4j_query_artifact_bytes, 1048576, "max_neo4j_query_artifact_bytes",
+);
+const MAX_NEO4J_EVIDENCE_BYTES = positiveInteger(
+    _config.max_neo4j_evidence_bytes, 5242880, "max_neo4j_evidence_bytes",
+);
+let graphQueryCount = 0;
 const API_MAX_RETRIES = _config.api_max_retries ?? 3;
 const API_TIMEOUT_MS = _config.api_timeout_ms ?? 600000;
 const ENABLE_TOOLS = _config.enable_tools ?? true;
 const ENABLE_STRUCTURED_IO = _config.enable_structured_io ?? true;
 const ENABLE_COMPRESSION_GUARD = _config.enable_compression_guard ?? true;
+if (
+    _config.enable_toon_output !== undefined &&
+    typeof _config.enable_toon_output !== "boolean"
+) {
+    throw new Error("enable_toon_output must be a boolean");
+}
+const ENABLE_TOON_OUTPUT = _config.enable_toon_output ?? true;
 const COMPRESSION_MIN_CHARS = _config.compression_min_chars ?? 5000;
 const COMPRESSION_RATIO = _config.compression_ratio ?? 0.6;
 // run(instruction=...) — applies to the ROOT agent only. Sub-agents are NOT given
@@ -111,10 +174,10 @@ const COMPRESSION_RATIO = _config.compression_ratio ?? 0.6;
 // via llm_query(instruction=...). There is intentionally no global instruction.
 const ROOT_INSTRUCTION = _config.instruction ?? null;
 
-function truncateText(text: string): string {
+function truncateText(text: string, limit = TRUNCATE_LEN): string {
     let truncatedOutput = "";
-    if (text.length > TRUNCATE_LEN) {
-        truncatedOutput = `[TRUNCATED: Last ${TRUNCATE_LEN} chars shown].. ` + text.slice(-TRUNCATE_LEN);
+    if (text.length > limit) {
+        truncatedOutput = `[TRUNCATED: Last ${limit} chars shown].. ` + text.slice(-limit);
     } else {
         if (text.length == 0) {
             truncatedOutput = "[EMPTY OUTPUT]";
@@ -173,7 +236,19 @@ export async function subagent(
     // From --session-file: the state path plus previously saved state (or null
     // on a fresh session). The heap is swept to disk after every step.
     session?: { file: string; state: SessionState | null; includeCode: boolean } | null,
+    // Dedicated graph channel. Ordinary llm_query calls never inherit it.
+    graphArtifact?: GraphArtifact | null,
+    graphAgent = false,
+    graphQueryId?: string,
+    evaluationQEntity?: unknown,
+    neo4j?: Neo4jHandle | null,
 ) {
+    if (graphAgent && !graphArtifact && !neo4j) {
+        throw new Error("graph child requires a NetworkX artifact or Neo4j source");
+    }
+    const effectiveGraph = graphArtifact ? assertGraphArtifact(graphArtifact) : null;
+    const neo4jMode = neo4j != null;
+    const graphAvailable = effectiveGraph != null || neo4jMode;
     // Structured I/O ablation: when disabled, ignore any requested output schema
     // (no validation, no schema preamble) and present dict/list contexts as plain
     // strings instead of running the structured flat-schema probe.
@@ -184,15 +259,38 @@ export async function subagent(
     const validate = compileSchema(effectiveSchema);
     const logger = new Logger(subagent_depth, MAX_CALLS, parent_run_id);
     logger.logAgentStart();
+    const graphOperations = new Set<string>();
+    let graphSeedResolutionLogged = false;
+    if (graphAvailable && subagent_depth === 0) {
+        logger.logEvent("graph_channel_open", {
+            max_graph_hops: MAX_GRAPH_HOPS,
+            graph: effectiveGraph
+                ? graphArtifactSummary(effectiveGraph)
+                : neo4jSourceSummary(neo4j!.source),
+        });
+    }
 
     const model_name = subagent_depth == 0 ? PRIMARY_AGENT : SUB_AGENT;
     const is_leaf_agent = subagent_depth == MAX_DEPTH;
     let stdoutBuffer = "";
+    const neo4jTranscriptBytes = MAX_NEO4J_TRANSCRIPT_BYTES;
+    const appendStdout = (text: string) => {
+        if (!neo4jMode) {
+            stdoutBuffer += text + "\n";
+            return;
+        }
+        const next = `${stdoutBuffer}${text}\n`;
+        if (new TextEncoder().encode(next).byteLength <= neo4jTranscriptBytes) {
+            stdoutBuffer = next;
+        } else if (!stdoutBuffer.includes("[TRUNCATED")) {
+            stdoutBuffer += "[TRUNCATED: Neo4j execution transcript limit reached]\n";
+        }
+    };
 
     const pyodide = await loadPyodide({
         stderr: (text: string) => console.error(`[Python Stderr]: ${text}`),
         stdout: (text: string) => {
-            stdoutBuffer += text + "\n";
+            appendStdout(text);
         },
     });
     if (getVerbosity() >= 2) console.log("✔ Python Ready");
@@ -204,21 +302,134 @@ export async function subagent(
     // After this, any tool can `import requests; requests.get(...)` as normal.
     const envSetupStart = Date.now();
     await pyodide.loadPackage("micropip");
+    const pyPackages = graphAvailable
+        ? ["requests", "httpx", "networkx"]
+        : ["requests", "httpx"];
     await pyodide.runPythonAsync(`
 import micropip
-await micropip.install(["requests", "httpx"])
+await micropip.install(${JSON.stringify(pyPackages)})
 `);
+    if (graphAvailable && ENABLE_TOON_OUTPUT) {
+        try {
+            await pyodide.runPythonAsync(`
+await micropip.install("toon-format==0.9.0b1")
+`);
+        } catch (error) {
+            throw new Error(
+                "Failed to install the pinned TOON graph-output dependency " +
+                "toon-format==0.9.0b1.",
+                { cause: error },
+            );
+        }
+    }
+    if (graphAvailable) {
+        await pyodide.runPythonAsync(GRAPH_RUNTIME_PY);
+    }
+    if (effectiveGraph) {
+        pyodide.globals.set("__graph_artifact_json__", JSON.stringify(effectiveGraph));
+    }
     const envSetupMs = Date.now() - envSetupStart;
     if (getVerbosity() >= 2) console.log(`✔ requests + httpx ready (env setup took ${envSetupMs}ms)`);
 
-    const pyProxyToJs = (val: unknown): unknown => {
-        if (val && typeof (val as { toJs?: unknown }).toJs === "function") {
-            return (val as { toJs: (opts: unknown) => unknown }).toJs({
-                dict_converter: Object.fromEntries,
-            });
-        }
-        return val;
-    };
+    const cypherAttemptGate = new CypherAttemptGate(MAX_CYPHER_QUERIES);
+    if (neo4jMode && graphAgent) {
+        pyodide.globals.set("__js_execute_read_only_cypher__", async (
+            rawQuery: unknown,
+            rawParameters: unknown,
+            rawLimit: unknown,
+        ) => {
+            const parameterValue = pyProxyToJs(rawParameters) ?? {};
+            const eventBase = {
+                graph_query_id: graphQueryId,
+                ...neo4jQueryMetadata(
+                    rawQuery, parameterValue, cypherAttemptGate.snapshot().attempts_used,
+                ),
+            };
+            if (
+                typeof parameterValue !== "object" || parameterValue === null ||
+                Array.isArray(parameterValue)
+            ) {
+                const error = "Cypher parameters must be a dict";
+                logger.logEvent("neo4j_query_rejected", { ...eventBase, error });
+                throw new Error(error);
+            }
+            let limit = MAX_CYPHER_ROWS;
+            if (rawLimit != null) {
+                const convertedLimit = pyProxyToJs(rawLimit);
+                const value = Number(convertedLimit);
+                if (typeof convertedLimit === "boolean" || !Number.isInteger(value) || value < 1) {
+                    const error = "Cypher limit must be a positive integer";
+                    logger.logEvent("neo4j_query_rejected", { ...eventBase, error });
+                    throw new Error(error);
+                }
+                limit = Math.min(value, MAX_CYPHER_ROWS);
+            }
+            let query: string;
+            try {
+                query = validateReadOnlyCypher(rawQuery, MAX_GRAPH_HOPS);
+            } catch (validationError) {
+                const error = validationError instanceof Error
+                    ? validationError.message
+                    : String(validationError);
+                logger.logEvent("neo4j_query_rejected", { ...eventBase, error });
+                throw validationError;
+            }
+            let signature: string;
+            try {
+                signature = cypherQuerySignature(
+                    query, parameterValue as Record<string, unknown>, limit,
+                );
+            } catch (signatureError) {
+                const error = signatureError instanceof Error
+                    ? signatureError.message
+                    : String(signatureError);
+                logger.logEvent("neo4j_query_rejected", { ...eventBase, error });
+                throw signatureError;
+            }
+            let budget: { attempts_used: number; attempts_remaining: number };
+            try {
+                budget = cypherAttemptGate.reserve(signature);
+            } catch (budgetError) {
+                const error = budgetError instanceof Error
+                    ? budgetError.message
+                    : String(budgetError);
+                logger.logEvent("neo4j_query_rejected", { ...eventBase, error });
+                throw budgetError;
+            }
+            logger.logEvent("neo4j_query_start", { ...eventBase, row_limit: limit });
+            const startedAt = Date.now();
+            try {
+                const result = await executeNeo4jRead(
+                    neo4j!,
+                    query,
+                    parameterValue as Record<string, unknown>,
+                    limit,
+                    CYPHER_TIMEOUT_MS,
+                );
+                if (new TextEncoder().encode(JSON.stringify(result.artifact)).byteLength >
+                    MAX_NEO4J_QUERY_ARTIFACT_BYTES) {
+                    throw new Error("Neo4j query artifact exceeds configured byte limit");
+                }
+                cypherAttemptGate.markSuccessful(signature);
+                const summary = graphArtifactSummary(result.artifact);
+                logger.logEvent("neo4j_query_result", {
+                    ...eventBase,
+                    duration_ms: Date.now() - startedAt,
+                    rows: result.rows,
+                    truncated: result.truncated,
+                    graph: summary,
+                });
+                return { artifact: result.artifact, budget };
+            } catch (queryError) {
+                logger.logEvent("neo4j_query_result", {
+                    ...eventBase,
+                    duration_ms: Date.now() - startedAt,
+                    ...neo4jErrorMetadata(queryError),
+                });
+                throw queryError;
+            }
+        });
+    }
 
     const js_llm_query = async (
         context: unknown,
@@ -318,6 +529,156 @@ await micropip.install(["requests", "httpx"])
     };
     pyodide.globals.set("__js_llm_query__", js_llm_query);
 
+    if (effectiveGraph) {
+        const js_graph_query = async (
+            context: unknown,
+            child_graph: unknown,
+            child_instruction?: unknown,
+        ) => {
+            if (subagent_depth >= MAX_DEPTH) {
+                throw new Error(
+                    "MAXIMUM DEPTH REACHED. You must process the graph without calling graph_query."
+                );
+            }
+            const plain = pyProxyToJs(context) as Context;
+            if (typeof plain !== "string" && (typeof plain !== "object" || plain === null)) {
+                throw new Error(
+                    `graph_query expects a string or dict/list context, got ${typeof plain}`
+                );
+            }
+            const childGraph = assertGraphArtifact(pyProxyToJs(child_graph));
+            let childInstruction: string | null = null;
+            if (child_instruction != null) {
+                const value = pyProxyToJs(child_instruction);
+                if (typeof value !== "string") {
+                    throw new Error("graph_query instruction must be a string");
+                }
+                childInstruction = value;
+            }
+            graphQueryCount = consumeGraphQuery(graphQueryCount, MAX_GRAPH_QUERIES);
+            const childGraphQueryId = crypto.randomUUID();
+            logger.logEvent("graph_query_start", {
+                graph_query_id: childGraphQueryId,
+                child_depth: subagent_depth + 1,
+                max_graph_hops: MAX_GRAPH_HOPS,
+                graph: graphArtifactSummary(childGraph),
+            });
+            if (getVerbosity() >= 2) console.log("↳ graph_query called");
+            const artifact = await subagent(
+                plain,
+                subagent_depth + 1,
+                logger.run_id,
+                null,
+                null,
+                envVars ?? null,
+                null,
+                [],
+                llmKwargs ?? null,
+                undefined,
+                childInstruction,
+                undefined,
+                childGraph,
+                true,
+                childGraphQueryId,
+                evaluationQEntity,
+            );
+            return { artifact, graph_query_id: childGraphQueryId };
+        };
+        pyodide.globals.set("__js_graph_query__", js_graph_query);
+        pyodide.globals.set("__js_graph_query_result__", async (
+            queryId: unknown,
+            graphType: unknown,
+            nodes: unknown,
+            edges: unknown,
+        ) => {
+            logger.logEvent("graph_query_result", {
+                graph_query_id: String(queryId),
+                max_graph_hops: MAX_GRAPH_HOPS,
+                graph: {
+                    backend: "networkx",
+                    graph_type: String(graphType),
+                    nodes: Number(nodes),
+                    edges: Number(edges),
+                },
+            });
+        });
+    }
+
+    if (neo4jMode && !graphAgent) {
+        const js_graph_query = async (
+            context: unknown,
+            child_instruction?: unknown,
+        ) => {
+            if (subagent_depth >= MAX_DEPTH) {
+                throw new Error(
+                    "MAXIMUM DEPTH REACHED. Neo4j retrieval requires a graph child."
+                );
+            }
+            const plain = pyProxyToJs(context) as Context;
+            if (typeof plain !== "string" && (typeof plain !== "object" || plain === null)) {
+                throw new Error(
+                    `graph_query expects a string or dict/list context, got ${typeof plain}`
+                );
+            }
+            let childInstruction: string | null = null;
+            if (child_instruction != null) {
+                const value = pyProxyToJs(child_instruction);
+                if (typeof value !== "string") {
+                    throw new Error("graph_query instruction must be a string");
+                }
+                childInstruction = value;
+            }
+            graphQueryCount = consumeGraphQuery(graphQueryCount, MAX_GRAPH_QUERIES);
+            const childGraphQueryId = crypto.randomUUID();
+            logger.logEvent("graph_query_start", {
+                graph_query_id: childGraphQueryId,
+                child_depth: subagent_depth + 1,
+                max_graph_hops: MAX_GRAPH_HOPS,
+                graph: neo4jSourceSummary(neo4j!.source),
+            });
+            if (getVerbosity() >= 2) console.log("↳ graph_query called");
+            const artifact = await subagent(
+                plain,
+                subagent_depth + 1,
+                logger.run_id,
+                null,
+                null,
+                envVars ?? null,
+                null,
+                [],
+                llmKwargs ?? null,
+                undefined,
+                childInstruction,
+                undefined,
+                null,
+                true,
+                childGraphQueryId,
+                evaluationQEntity,
+                neo4j,
+            );
+            return { artifact, graph_query_id: childGraphQueryId };
+        };
+        pyodide.globals.set("__js_graph_query__", js_graph_query);
+        pyodide.globals.set("__js_graph_query_result__", async (
+            queryId: unknown,
+            graphType: unknown,
+            nodes: unknown,
+            edges: unknown,
+        ) => {
+            logger.logEvent("graph_query_result", {
+                graph_query_id: String(queryId),
+                max_graph_hops: MAX_GRAPH_HOPS,
+                graph: {
+                    backend: "networkx",
+                    source_backend: "neo4j",
+                    graph_type: String(graphType),
+                    nodes: Number(nodes),
+                    edges: Number(edges),
+                },
+            });
+        });
+    }
+
     // ---- Batch compression guard -------------------------------------------
     // batch_llm_query (a drop-in for asyncio.gather over llm_query calls) routes
     // here ONCE for the whole fan-out. Python passes {parentChars, items:[{childChars,
@@ -404,18 +765,26 @@ await micropip.install(["requests", "httpx"])
 os.environ.update(_json.loads(${JSON.stringify(JSON.stringify(envVars))}))
 `
         : "";
-    const setup_code = `
-${envInjection}context = ${contextLiteral}
-__final_result__ = None
-__final_result_set__ = False
-
-def FINAL(x):
-    global __final_result__, __final_result_set__
-    __final_result__ = x
-    __final_result_set__ = True
-
-__tools__ = []
-
+    const graphInputSetup = effectiveGraph
+        ? `import json as __graph_json\n__graph_artifact = __graph_json.loads(__graph_artifact_json__)\ngraph = __artifact_to_graph__(__graph_artifact)\nentity_index = __graph_artifact.get("entity_index")\nmax_graph_hops = ${MAX_GRAPH_HOPS}\nmin_entity_confidence = ${MIN_ENTITY_CONFIDENCE}\n`
+        : "";
+    const neo4jInputSetup = neo4jMode
+        ? `max_graph_hops = ${MAX_GRAPH_HOPS}\nmin_entity_confidence = ${MIN_ENTITY_CONFIDENCE}\nmax_cypher_queries = ${MAX_CYPHER_QUERIES}\nmax_cypher_rows = ${MAX_CYPHER_ROWS}\n__neo4j_observation_bytes__ = ${MAX_NEO4J_OBSERVATION_BYTES}\n`
+        : "";
+    const finalSetup = graphFinalSetup(graphAgent, MAX_GRAPH_HOPS, neo4jMode);
+    const graphQuerySetup = effectiveGraph
+        ? GRAPH_QUERY_PY
+        : (neo4jMode && !graphAgent ? NEO4J_GRAPH_QUERY_PY : "");
+    const neo4jInspectionSetup = neo4jMode ? NEO4J_INSPECTION_PY : "";
+    const cypherSetup = neo4jMode && graphAgent
+        ? `__neo4j_evidence_bytes__ = ${MAX_NEO4J_EVIDENCE_BYTES}\n${NEO4J_CYPHER_PY}`
+        : "";
+    const graphPrintEncodingSetup = graphAvailable
+        ? `__graph_print_encoding__ = ${JSON.stringify(ENABLE_TOON_OUTPUT ? "toon" : "json")}\n`
+        : "";
+    const printSetup = graphAvailable
+        ? TOON_PRINT_PY
+        : String.raw`
 # Pretty-print Pydantic models, JsProxy objects, and nested dicts/lists as
 # JSON. Plain strings/numbers/etc. fall through to the original print.
 import builtins as __builtins__
@@ -461,6 +830,13 @@ def print(*args, **kwargs):
     __real_print__(*_out, **kwargs)
 
 __builtins__.print = print
+`;
+    const setup_code = `
+${envInjection}context = ${contextLiteral}
+${graphInputSetup}${neo4jInputSetup}${finalSetup}${graphQuerySetup}${neo4jInspectionSetup}${cypherSetup}${graphPrintEncodingSetup}
+
+__tools__ = []
+${printSetup}
 
 def __register_tool__(src):
     _ns = {}
@@ -736,7 +1112,7 @@ print("---")
 `
         : "";
     // Tools probe is omitted entirely when the tools capability is disabled.
-    const toolsProbeCode = ENABLE_TOOLS
+    const toolsProbeCode = ENABLE_TOOLS && !graphAvailable
         ? `
 import inspect as _inspect
 if __tools__:
@@ -765,6 +1141,22 @@ else:
     print("Available tools: (none provided)")
 `
         : "";
+    const graphProbeCode = effectiveGraph
+        ? `
+print("---")
+print(f"Graph: {type(graph).__name__}, nodes={graph.number_of_nodes()}, edges={graph.number_of_edges()}")
+${graphAgent
+        ? `print(f"Graph hop limit: {max_graph_hops}; return <=20 path edges with GRAPH_FINAL(subgraph)")`
+        : `print("Delegate immediately with graph_query; do not inspect the large graph here")`}
+`
+        : neo4jMode
+        ? `
+print("---")
+${graphAgent
+        ? `print(f"Neo4j graph child: up to {max_cypher_queries} reads, {max_cypher_rows} rows each, max_graph_hops={max_graph_hops}")`
+        : `print("Neo4j graph source configured; delegate immediately with graph_query")`}
+`
+        : "";
     const initial_code = `
 ${schemaPreambleCode}if isinstance(context, dict):
     print(f"Context type: dict")
@@ -789,7 +1181,7 @@ else:
         print(f"Last 500 characters of str(context): ", str(context)[-500:])
     else:
         print(f"Context: ", context)
-${toolsProbeCode}${mcpProbeCode}${sessionEnabled ? SESSION_PROBE_PY : ""}`
+${graphProbeCode}${toolsProbeCode}${mcpProbeCode}${sessionEnabled ? SESSION_PROBE_PY : ""}`
     stdoutBuffer = "";
     const step0ExecStart = now();
     await pyodide.runPythonAsync(initial_code);
@@ -830,7 +1222,16 @@ Output:\n${stdoutBuffer.trim()}
         enableTools: ENABLE_TOOLS,
         enableStructuredIo: ENABLE_STRUCTURED_IO,
         enableCompressionGuard: ENABLE_COMPRESSION_GUARD,
+        enableToonOutput: ENABLE_TOON_OUTPUT,
         instruction: instruction ?? null,
+        graphAvailable,
+        graphMode: graphAgent,
+        graphBackend: neo4jMode ? "neo4j" as const : "networkx" as const,
+        maxGraphHops: MAX_GRAPH_HOPS,
+        minEntityConfidence: MIN_ENTITY_CONFIDENCE,
+        neo4jSchema: neo4j?.source.schema,
+        maxCypherQueries: MAX_CYPHER_QUERIES,
+        maxCypherRows: MAX_CYPHER_ROWS,
     };
     const apiOpts = { maxRetries: API_MAX_RETRIES, timeout: API_TIMEOUT_MS };
 
@@ -934,6 +1335,9 @@ Output:\n${stdoutBuffer.trim()}
         }
         // Reset stdout buffer for this execution
         stdoutBuffer = "";
+        if (neo4jMode && graphAgent) {
+            cypherAttemptGate.resetStep();
+        }
 
         const execStart = now();
         let execThrew = false;
@@ -941,13 +1345,92 @@ Output:\n${stdoutBuffer.trim()}
             await pyodide.runPythonAsync(code);
         } catch (error) {
             execThrew = true;
-            if (error instanceof Error) {
+            if (neo4jMode) {
+                appendStdout("Error: Neo4j graph REPL execution failed");
+            } else if (error instanceof Error) {
                 stdoutBuffer += `\nError: ${error.message} `;
             } else {
                 stdoutBuffer += `\nError: ${error} `;
             }
         }
         const execEnd = now();
+
+        if (graphAgent && !execThrew) {
+            const observed = await pyodide.runPythonAsync(
+                `__graph_operations__(${JSON.stringify(code)})`,
+            );
+            for (const operation of observed.toJs() as string[]) {
+                graphOperations.add(operation);
+            }
+            const runtimeObserved = await pyodide.runPythonAsync(
+                "sorted(__graph_runtime_operations__)",
+            );
+            for (const operation of runtimeObserved.toJs() as string[]) {
+                graphOperations.add(operation);
+            }
+            const seedResolutionCalled = await pyodide.runPythonAsync(
+                "__graph_seed_resolution_called__",
+            );
+            if (seedResolutionCalled && !graphSeedResolutionLogged) {
+                const seedSource = await pyodide.runPythonAsync(
+                    "__graph_runtime_seed_source__",
+                );
+                const seedCount = await pyodide.runPythonAsync(
+                    "len(__graph_runtime_seeds__)",
+                );
+                const seeds = await pyodide.runPythonAsync(
+                    "list(__graph_runtime_seeds__)",
+                );
+                const seedMethods = await pyodide.runPythonAsync(
+                    "list(__graph_runtime_seed_methods__)",
+                );
+                const entityMentions = await pyodide.runPythonAsync(
+                    "list(__graph_runtime_entity_mentions__)",
+                );
+                const seedCandidates = await pyodide.runPythonAsync(
+                    "list(__graph_runtime_seed_candidates__)",
+                );
+                const candidateCount = await pyodide.runPythonAsync(
+                    "__graph_runtime_candidate_count__",
+                );
+                const entityPrecision = await pyodide.runPythonAsync(
+                    "__graph_runtime_entity_precision__",
+                );
+                const entityRecall = await pyodide.runPythonAsync(
+                    "__graph_runtime_entity_recall__",
+                );
+                const predictedSeeds = pyProxyToJs(seeds) as unknown[];
+                const consideredSeedEntities = seedEntityNames(
+                    pyProxyToJs(seedCandidates),
+                );
+                const evaluationMetrics = evaluationQEntity !== undefined
+                    ? entityPrecisionRecall(
+                        predictedSeeds,
+                        Array.isArray(evaluationQEntity)
+                            ? evaluationQEntity
+                            : [evaluationQEntity],
+                    )
+                    : null;
+                logger.logEvent("graph_seed_resolution", {
+                    graph_query_id: graphQueryId,
+                    candidate_count: Number(candidateCount),
+                    min_entity_confidence: MIN_ENTITY_CONFIDENCE,
+                    entity_precision: evaluationMetrics?.precision ?? pyProxyToJs(entityPrecision),
+                    entity_recall: evaluationMetrics?.recall ?? pyProxyToJs(entityRecall),
+                    seed_source: String(seedSource),
+                    seed_count: Number(seedCount),
+                    seed_match_methods: seedMethods.toJs() as string[],
+                    seed_entities_considered: consideredSeedEntities,
+                    selected_seed_entities: predictedSeeds.map(String),
+                    ...(neo4jMode ? {} : {
+                        entity_mentions: entityMentions.toJs() as string[],
+                        candidates: seedCandidates.toJs(),
+                        seeds: predictedSeeds,
+                    }),
+                });
+                graphSeedResolutionLogged = true;
+            }
+        }
 
         // Session: snapshot the heap after every step (crash-safety), passing
         // the step's code so comments/function defs are harvested from it.
@@ -969,7 +1452,10 @@ Output:\n${stdoutBuffer.trim()}
                 console.error(`[session] sweep failed: ${e instanceof Error ? e.message : e}`);
             }
         }
-        let truncatedText = truncateText(stdoutBuffer);
+        let truncatedText = truncateText(
+            stdoutBuffer,
+            neo4jMode ? Math.min(TRUNCATE_LEN, neo4jTranscriptBytes) : TRUNCATE_LEN,
+        );
 
         const stepTimestamps = {
             llm_call_start: llmCallStart,
@@ -977,6 +1463,76 @@ Output:\n${stdoutBuffer.trim()}
             execution_start: execStart,
             execution_end: execEnd,
         };
+
+        if (graphAgent) {
+            const graphFinalResultSet = pyodide.globals.get("__graph_final_result_set__");
+            if (graphFinalResultSet) {
+                const rawArtifact = pyodide.globals.get("__graph_final_result__");
+                const result = assertGraphArtifact(pyProxyToJs(rawArtifact));
+                const summary = graphArtifactSummary(result);
+                const seedSource = await pyodide.runPythonAsync("__graph_runtime_seed_source__");
+                const seedCount = await pyodide.runPythonAsync("len(__graph_runtime_seeds__)");
+                const seeds = await pyodide.runPythonAsync(
+                    "list(__graph_runtime_seeds__)",
+                );
+                const seedMethods = await pyodide.runPythonAsync(
+                    "list(__graph_runtime_seed_methods__)",
+                );
+                const seedCandidates = await pyodide.runPythonAsync(
+                    "list(__graph_runtime_seed_candidates__)",
+                );
+                const predictedSeeds = pyProxyToJs(seeds) as unknown[];
+                const evaluationMetrics = evaluationQEntity !== undefined
+                    ? entityPrecisionRecall(
+                        predictedSeeds,
+                        Array.isArray(evaluationQEntity)
+                            ? evaluationQEntity
+                            : [evaluationQEntity],
+                    )
+                    : null;
+                logger.logStep({
+                    step: i + 1,
+                    code,
+                    output: truncatedText,
+                    reasoning: message.reasoning,
+                    usage,
+                    timestamps: stepTimestamps,
+                });
+                logger.logEvent("graph_final", {
+                    graph_query_id: graphQueryId,
+                    graph: summary,
+                    max_graph_hops: MAX_GRAPH_HOPS,
+                    operations: [...graphOperations].sort(),
+                    seed_source: String(seedSource),
+                    seed_count: Number(seedCount),
+                    seed_match_methods: seedMethods.toJs() as string[],
+                    seed_entities_considered: seedEntityNames(
+                        pyProxyToJs(seedCandidates),
+                    ),
+                    selected_seed_entities: predictedSeeds.map(String),
+                    ...(evaluationMetrics ? {
+                        entity_precision: evaluationMetrics.precision,
+                        entity_recall: evaluationMetrics.recall,
+                    } : {}),
+                });
+                printStep({
+                    run_id: logger.run_id,
+                    parent_run_id,
+                    depth: subagent_depth,
+                    step: i + 1,
+                    maxSteps: MAX_CALLS,
+                    code,
+                    output: truncatedText,
+                    reasoning: message.reasoning,
+                    usage,
+                    totalUsage: getTotalUsage(),
+                    timestamps: stepTimestamps,
+                });
+                logger.logFinalResult({ graph: summary });
+                logger.logAgentEnd();
+                return result;
+            }
+        }
 
         const finalResultSet = pyodide.globals.get("__final_result_set__");
         if (finalResultSet) {
@@ -998,7 +1554,10 @@ Output:\n${stdoutBuffer.trim()}
                     "__final_result__ = None\n__final_result_set__ = False\n"
                 );
                 stdoutBuffer += `\n${feedback}\n`;
-                const truncatedErr = truncateText(stdoutBuffer);
+                const truncatedErr = truncateText(
+                    stdoutBuffer,
+                    neo4jMode ? Math.min(TRUNCATE_LEN, neo4jTranscriptBytes) : TRUNCATE_LEN,
+                );
                 logger.logStep({
                     step: i + 1,
                     code,
@@ -1117,6 +1676,7 @@ if (import.meta.main) {
     let out: unknown;
     let fatalError: string | null = null;
     let mcpHandle: McpHandle | null = null;
+    let neo4jHandle: Neo4jHandle | null = null;
     try {
         const raw_stdin = await new Response(Deno.stdin.readable).text();
         const inputIsJson = Deno.args.includes("--input-json");
@@ -1192,6 +1752,35 @@ if (import.meta.main) {
             rootLlmKwargs = parsed as Record<string, unknown>;
         }
 
+        const graphIdx = Deno.args.indexOf("--graph-file");
+        let rootGraph: GraphArtifact | null = null;
+        if (graphIdx !== -1 && Deno.args[graphIdx + 1]) {
+            const raw = await Deno.readTextFile(Deno.args[graphIdx + 1]);
+            rootGraph = assertGraphArtifact(JSON.parse(raw));
+        }
+        const neo4jIdx = Deno.args.indexOf("--neo4j-file");
+        let neo4jSource: Neo4jSource | null = null;
+        if (neo4jIdx !== -1 && Deno.args[neo4jIdx + 1]) {
+            const raw = await Deno.readTextFile(Deno.args[neo4jIdx + 1]);
+            neo4jSource = assertNeo4jSource(JSON.parse(raw));
+        }
+        if (rootGraph && neo4jSource) {
+            throw new Error("Pass either a NetworkX graph or a Neo4j graph source, not both");
+        }
+        if (neo4jSource) {
+            neo4jHandle = await connectNeo4j(neo4jSource);
+            if (getVerbosity() >= 2) {
+                console.log(`✔ Neo4j connected: database=${neo4jSource.database}`);
+            }
+        }
+        const evaluationQEntityIdx = Deno.args.indexOf("--evaluation-q-entity-file");
+        let evaluationQEntity: unknown = undefined;
+        if (evaluationQEntityIdx !== -1 && Deno.args[evaluationQEntityIdx + 1]) {
+            evaluationQEntity = JSON.parse(
+                await Deno.readTextFile(Deno.args[evaluationQEntityIdx + 1]),
+            );
+        }
+
         // Resumable session: --session-file <path>. Prior state (if the file
         // exists) is restored into the root REPL; the heap is swept back to the
         // file after every step.
@@ -1207,7 +1796,25 @@ if (import.meta.main) {
 
         // Root agent: mcpAllowedServers = null → sees all configured servers.
         // ROOT_INSTRUCTION (from run(instruction=...)) applies to the root only.
-        out = await subagent(query_context, 0, undefined, rootSchema, rootTools, rootEnv, mcpHandle, null, rootLlmKwargs, undefined, ROOT_INSTRUCTION, sessionArg);
+        out = await subagent(
+            query_context,
+            0,
+            undefined,
+            rootSchema,
+            rootTools,
+            rootEnv,
+            mcpHandle,
+            null,
+            rootLlmKwargs,
+            undefined,
+            ROOT_INSTRUCTION,
+            sessionArg,
+            rootGraph,
+            false,
+            undefined,
+            evaluationQEntity,
+            neo4jHandle,
+        );
 
         // Final result is already logged inside subagent()
         // Show global usage across all runs
@@ -1221,6 +1828,9 @@ if (import.meta.main) {
         // Close MCP connections (and any stdio subprocesses) before exit.
         if (mcpHandle) {
             try { await mcpHandle.closeAll(); } catch { /* ignore */ }
+        }
+        if (neo4jHandle) {
+            try { await neo4jHandle.driver.close(); } catch { /* ignore */ }
         }
 
         // Flush logs before exit
